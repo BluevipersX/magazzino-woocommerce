@@ -244,7 +244,8 @@ async function saveConfig() {
 async function loadProducts(page = state.page) {
   const requestId = ++state.requestId;
   setLoading(true);
-  setStatus("Caricamento prodotti...");
+  const hasFilters = Boolean(els.searchInput.value || els.setFilter.value || els.languageFilter.value || els.stockFilter.value);
+  setStatus(hasFilters ? "Filtro prodotti in corso..." : "Caricamento prodotti...");
   try {
     const result = await window.magazzino.listProducts({
       page,

@@ -10,6 +10,7 @@ let updateState = "Aggiornamenti non controllati.";
 const windowIcon = path.join(__dirname, "..", "build", "icon.ico");
 const appLogo = path.join(__dirname, "..", "build", "icon.png");
 const releaseApiUrl = "https://api.github.com/repos/BluevipersX/magazzino-woocommerce/releases";
+let attributeFilterCache = null;
 
 const createWindow = () => {
   mainWindow = new BrowserWindow({
@@ -460,8 +461,39 @@ async function getAttributeTerms(attribute) {
   }));
 }
 
+async function getAttributeFilterConfig() {
+  if (attributeFilterCache) return attributeFilterCache;
+
+  const result = await wooRequest("products/attributes", { query: { per_page: 100 } });
+  const attributes = result.data || [];
+  const setAttribute = findAttribute(attributes, "set");
+  const languageAttribute = findAttribute(attributes, "lingua") || findAttribute(attributes, "language");
+
+  attributeFilterCache = {
+    set: setAttribute ? {
+      id: setAttribute.id,
+      name: setAttribute.name,
+      slug: setAttribute.slug,
+      queryName: setAttribute.slug || `pa_${normalizeSlug(setAttribute.name)}`,
+      terms: await getAttributeTerms(setAttribute)
+    } : null,
+    language: languageAttribute ? {
+      id: languageAttribute.id,
+      name: languageAttribute.name,
+      slug: languageAttribute.slug,
+      queryName: languageAttribute.slug || `pa_${normalizeSlug(languageAttribute.name)}`,
+      terms: await getAttributeTerms(languageAttribute)
+    } : null
+  };
+
+  return attributeFilterCache;
+}
+
 ipcMain.handle("config:get", readConfig);
-ipcMain.handle("config:save", async (_event, config) => writeConfig(config));
+ipcMain.handle("config:save", async (_event, config) => {
+  attributeFilterCache = null;
+  return writeConfig(config);
+});
 ipcMain.handle("updates:state", async () => updateState);
 ipcMain.handle("updates:check", async () => checkForUpdates());
 ipcMain.handle("window:minimize", () => mainWindow.minimize());
@@ -487,25 +519,7 @@ ipcMain.handle("woo:test", async () => {
 });
 
 ipcMain.handle("attributes:filters", async () => {
-  const result = await wooRequest("products/attributes", { query: { per_page: 100 } });
-  const attributes = result.data || [];
-  const setAttribute = findAttribute(attributes, "set");
-  const languageAttribute = findAttribute(attributes, "lingua") || findAttribute(attributes, "language");
-
-  return {
-    set: setAttribute ? {
-      id: setAttribute.id,
-      name: setAttribute.name,
-      slug: setAttribute.slug,
-      terms: await getAttributeTerms(setAttribute)
-    } : null,
-    language: languageAttribute ? {
-      id: languageAttribute.id,
-      name: languageAttribute.name,
-      slug: languageAttribute.slug,
-      terms: await getAttributeTerms(languageAttribute)
-    } : null
-  };
+  return getAttributeFilterConfig();
 });
 
 ipcMain.handle("products:list", async (_event, params = {}) => {
@@ -514,53 +528,59 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
   const stockStatus = String(params.stockStatus || "");
   const setTerm = String(params.setTerm || "").trim();
   const languageTerm = String(params.languageTerm || "").trim();
-  const hasAttributeFilters = Boolean(setTerm || languageTerm);
+  const filterConfig = (setTerm || languageTerm) ? await getAttributeFilterConfig() : null;
+  const attributes = [];
 
-  const rows = [];
-  let total = 0;
-  let totalPages = 1;
-  const pagesToRead = hasAttributeFilters ? 10 : 1;
-
-  for (let currentPage = 1; currentPage <= pagesToRead; currentPage += 1) {
-    const result = await wooRequest("products", {
-      query: {
-        page: hasAttributeFilters ? currentPage : page,
-        per_page: 100,
-        search,
-        status: "publish",
-        stock_status: stockStatus
-      }
+  if (setTerm && filterConfig && filterConfig.set) {
+    attributes.push({
+      attribute: filterConfig.set.queryName,
+      slug: setTerm
     });
-
-    total = result.total;
-    totalPages = result.totalPages;
-
-    for (const product of result.data || []) {
-      if (product.type === "variable") {
-        const variations = await wooRequest(`products/${product.id}/variations`, {
-          query: { per_page: 100 }
-        });
-        for (const variation of variations.data || []) rows.push(productRow(product, variation));
-      } else {
-        rows.push(productRow(product));
-      }
-    }
-
-    if (!hasAttributeFilters || currentPage >= result.totalPages) break;
   }
 
-  const filteredRows = rows.filter((row) => rowMatchesFilters(row, { setTerm, languageTerm }));
-  const pageSize = 100;
-  const filteredPage = hasAttributeFilters ? page : 1;
-  const pagedRows = hasAttributeFilters
-    ? filteredRows.slice((filteredPage - 1) * pageSize, filteredPage * pageSize)
-    : filteredRows;
+  if (languageTerm && filterConfig && filterConfig.language) {
+    attributes.push({
+      attribute: filterConfig.language.queryName,
+      slug: languageTerm
+    });
+  }
+
+  const rows = [];
+  const query = {
+    page,
+    per_page: 100,
+    search,
+    status: "publish",
+    stock_status: stockStatus
+  };
+
+  if (attributes.length) {
+    query.attributes = JSON.stringify(attributes);
+    query.attribute_relation = "and";
+  }
+
+  const result = await wooRequest("products", { query });
+
+  for (const product of result.data || []) {
+    if (product.type === "variable") {
+      const variations = await wooRequest(`products/${product.id}/variations`, {
+        query: { per_page: 100 }
+      });
+      for (const variation of variations.data || []) {
+        const row = productRow(product, variation);
+        if (!attributes.length || rowMatchesFilters(row, { setTerm, languageTerm })) rows.push(row);
+      }
+    } else {
+      const row = productRow(product);
+      if (!attributes.length || rowMatchesFilters(row, { setTerm, languageTerm })) rows.push(row);
+    }
+  }
 
   return {
-    rows: pagedRows,
+    rows,
     page,
-    total: hasAttributeFilters ? filteredRows.length : total,
-    totalPages: hasAttributeFilters ? Math.max(Math.ceil(filteredRows.length / pageSize), 1) : totalPages
+    total: result.total,
+    totalPages: result.totalPages
   };
 });
 
