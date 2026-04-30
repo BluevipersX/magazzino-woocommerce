@@ -46,7 +46,7 @@ Il programma verra generato in `release`.
 
 L'installer principale avra un nome simile a:
 
-`Magazzino WooCommerce Setup 0.1.0.exe`
+`Magazzino-WooCommerce-Setup-0.1.1.exe`
 
 L'utente dovra solo aprire quell'eseguibile e seguire l'installazione.
 
@@ -64,18 +64,20 @@ Gli aggiornamenti sono configurati per usare GitHub Releases.
 
 Per pubblicare una nuova versione:
 
-1. aumenta il campo `version` in `package.json`, per esempio da `0.1.0` a `0.1.1`
+1. aumenta il campo `version` in `package.json`, per esempio da `0.1.1` a `0.1.2`
 2. crea un tag Git con la stessa versione:
 
 ```powershell
 git add .
-git commit -m "Release 0.1.1"
-git tag v0.1.1
+git commit -m "Release 0.1.2"
+git tag v0.1.2
 git push
-git push origin v0.1.1
+git push origin v0.1.2
 ```
 
 3. GitHub Actions creera automaticamente l'installer e lo carichera nella sezione Releases
+
+Nota: per aggiornamenti automatici verso altri PC, il repository GitHub deve essere pubblico oppure bisogna usare un sistema con token privati. La soluzione piu semplice e rendere pubblico questo repository o usare un repository pubblico separato solo per le release.
 
 La workflow si trova in `.github/workflows/release.yml`.
 
