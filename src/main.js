@@ -19,6 +19,31 @@ let productCacheStatus = {
   message: "Cache prodotti non inizializzata."
 };
 let productCachePromise = null;
+const productFields = [
+  "id",
+  "type",
+  "name",
+  "sku",
+  "images",
+  "regular_price",
+  "sale_price",
+  "stock_quantity",
+  "stock_status",
+  "manage_stock",
+  "permalink",
+  "attributes"
+].join(",");
+const variationFields = [
+  "id",
+  "sku",
+  "image",
+  "regular_price",
+  "sale_price",
+  "stock_quantity",
+  "stock_status",
+  "manage_stock",
+  "attributes"
+].join(",");
 
 const createWindow = () => {
   mainWindow = new BrowserWindow({
@@ -492,6 +517,22 @@ function paginateRows(rows, page, pageSize) {
   return rows.slice(start, start + pageSize);
 }
 
+async function mapLimit(items, limit, mapper) {
+  const results = new Array(items.length);
+  let cursor = 0;
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
 function findAttribute(attributes, wanted) {
   return attributes.find((attr) => {
     const slug = normalizeSlug(attr.slug || attr.name);
@@ -546,21 +587,21 @@ async function fetchProductRowsPage(page) {
     query: {
       page,
       per_page: 100,
-      status: "publish"
+      status: "publish",
+      _fields: productFields
     }
   });
 
-  const rows = [];
-  for (const product of result.data || []) {
+  const pageRows = await mapLimit(result.data || [], 8, async (product) => {
     if (product.type === "variable") {
       const variations = await wooRequest(`products/${product.id}/variations`, {
-        query: { per_page: 100 }
+        query: { per_page: 100, _fields: variationFields }
       });
-      for (const variation of variations.data || []) rows.push(productRow(product, variation));
-    } else {
-      rows.push(productRow(product));
+      return (variations.data || []).map((variation) => productRow(product, variation));
     }
-  }
+    return [productRow(product)];
+  });
+  const rows = pageRows.flat();
 
   return {
     rows,
