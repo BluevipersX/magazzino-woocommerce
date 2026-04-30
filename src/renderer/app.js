@@ -16,6 +16,10 @@ const els = {
   menuRefreshButton: document.querySelector("#menuRefreshButton"),
   menuQuitButton: document.querySelector("#menuQuitButton"),
   menuUpdateButton: document.querySelector("#menuUpdateButton"),
+  listViewButton: document.querySelector("#listViewButton"),
+  gridViewButton: document.querySelector("#gridViewButton"),
+  inlineListViewButton: document.querySelector("#inlineListViewButton"),
+  inlineGridViewButton: document.querySelector("#inlineGridViewButton"),
   helpButton: document.querySelector("#helpButton"),
   themeToggleButton: document.querySelector("#themeToggleButton"),
   configForm: document.querySelector("#configForm"),
@@ -37,7 +41,9 @@ const els = {
   nextButton: document.querySelector("#nextButton"),
   pageText: document.querySelector("#pageText"),
   statusText: document.querySelector("#statusText"),
-  productBody: document.querySelector("#productBody")
+  productBody: document.querySelector("#productBody"),
+  tableShell: document.querySelector(".tableShell"),
+  gridShell: document.querySelector("#gridShell")
 };
 
 function setStatus(message, tone = "normal") {
@@ -54,6 +60,18 @@ function applyTheme(theme) {
 
 function toggleTheme() {
   applyTheme(state.theme === "dark" ? "light" : "dark");
+}
+
+function setProductView(view) {
+  const nextView = view === "grid" ? "grid" : "list";
+  localStorage.setItem("productView", nextView);
+  els.tableShell.classList.toggle("hidden", nextView === "grid");
+  els.gridShell.classList.toggle("active", nextView === "grid");
+  els.inlineListViewButton.classList.toggle("active", nextView === "list");
+  els.inlineGridViewButton.classList.toggle("active", nextView === "grid");
+  els.listViewButton.textContent = nextView === "list" ? "Vista elenco attiva" : "Vista elenco";
+  els.gridViewButton.textContent = nextView === "grid" ? "Vista griglia attiva" : "Vista griglia";
+  renderRows();
 }
 
 function hasConfig() {
@@ -102,6 +120,7 @@ function renderRows() {
 
   if (!state.rows.length) {
     els.productBody.innerHTML = `<tr><td colspan="9" class="empty">Nessun prodotto trovato.</td></tr>`;
+    els.gridShell.innerHTML = `<div class="empty gridEmpty">Nessun prodotto trovato.</div>`;
     return;
   }
 
@@ -130,6 +149,35 @@ function renderRows() {
         <td><span class="badge ${escapeAttr(row.stockStatus)}">${stockLabel(row.stockStatus)}</span></td>
         <td><button type="button" data-action="save">Salva</button></td>
       </tr>
+    `
+    )
+    .join("");
+
+  els.gridShell.innerHTML = state.rows
+    .map(
+      (row, index) => `
+      <article class="productCard ${row.stockStatus}">
+        <div class="cardImage">
+          ${
+            row.imageUrl
+              ? `<img src="${escapeAttr(row.imageUrl)}" alt="${escapeAttr(row.imageAlt || row.name)}" loading="lazy" />`
+              : `<span>N/D</span>`
+          }
+        </div>
+        <div class="cardBody">
+          <div class="productName">${escapeHtml(row.name)}</div>
+          <div class="subtle">SKU ${escapeHtml(row.sku || "-")} · ID ${row.id}</div>
+          <div class="cardFields">
+            <label>Prezzo<input class="cellInput" data-index="${index}" data-field="regularPrice" value="${escapeAttr(moneyValue(row.regularPrice))}" inputmode="decimal" /></label>
+            <label>Sconto<input class="cellInput" data-index="${index}" data-field="salePrice" value="${escapeAttr(moneyValue(row.salePrice))}" inputmode="decimal" /></label>
+            <label>Quantita<input class="qtyInput" data-index="${index}" data-field="stockQuantity" value="${escapeAttr(moneyValue(row.stockQuantity))}" inputmode="numeric" /></label>
+          </div>
+          <div class="cardActions">
+            <span class="badge ${escapeAttr(row.stockStatus)}">${stockLabel(row.stockStatus)}</span>
+            <button type="button" data-index="${index}" data-action="save-card">Salva</button>
+          </div>
+        </div>
+      </article>
     `
     )
     .join("");
@@ -258,6 +306,35 @@ async function saveRow(tr) {
   }
 }
 
+async function saveGridCard(button) {
+  const index = Number(button.dataset.index);
+  const card = button.closest(".productCard");
+  const row = { ...state.rows[index] };
+  card.querySelectorAll("input[data-field]").forEach((input) => {
+    row[input.dataset.field] = input.value.trim();
+  });
+
+  const qty = row.stockQuantity;
+  if (qty !== "" && !Number.isInteger(Number(qty))) {
+    setStatus("La quantita deve essere un numero intero.", "error");
+    return;
+  }
+
+  setLoading(true);
+  setStatus(`Salvataggio ${row.name}...`);
+  try {
+    await window.magazzino.updateProduct(row);
+    state.rows[index] = row;
+    setStatus("Prodotto aggiornato.", "ok");
+    await loadProducts(state.page);
+  } catch (error) {
+    setStatus(error.message || "Errore durante il salvataggio.", "error");
+  } finally {
+    setLoading(false);
+    renderRows();
+  }
+}
+
 els.configForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
@@ -312,6 +389,10 @@ els.updateButton.addEventListener("click", async () => {
 });
 els.menuUpdateButton.addEventListener("click", () => els.updateButton.click());
 els.themeToggleButton.addEventListener("click", toggleTheme);
+els.listViewButton.addEventListener("click", () => setProductView("list"));
+els.gridViewButton.addEventListener("click", () => setProductView("grid"));
+els.inlineListViewButton.addEventListener("click", () => setProductView("list"));
+els.inlineGridViewButton.addEventListener("click", () => setProductView("grid"));
 els.helpButton.addEventListener("click", () => window.magazzino.showHelp());
 els.menuQuitButton.addEventListener("click", () => window.magazzino.quitApp());
 els.minimizeButton.addEventListener("click", () => window.magazzino.minimizeWindow());
@@ -340,6 +421,16 @@ els.productBody.addEventListener("click", (event) => {
   if (button) saveRow(button.closest("tr"));
 });
 
+els.gridShell.addEventListener("input", (event) => {
+  const card = event.target.closest(".productCard");
+  if (card) card.classList.add("dirty");
+});
+
+els.gridShell.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-action='save-card']");
+  if (button) saveGridCard(button);
+});
+
 window.magazzino.onUpdateState(setUpdateStatus);
 window.magazzino.onWindowMaximized((isMaximized) => {
   els.maximizeButton.textContent = isMaximized ? "[_]" : "[ ]";
@@ -349,5 +440,6 @@ window.magazzino.isWindowMaximized().then((isMaximized) => {
 });
 window.magazzino.getUpdateState().then(setUpdateStatus);
 applyTheme(state.theme);
+setProductView(localStorage.getItem("productView") || "list");
 loadConfig();
 renderRows();

@@ -218,19 +218,7 @@ body {
 
 .appShell {
   min-height: 0;
-  display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
-}
-
-.sidebar {
-  min-height: 0;
-  padding: 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  background: #0d0d0d;
-  color: #f5f0e9;
-  border-right: 1px solid var(--color-border);
+  display: block;
 }
 
 .eyebrow {
@@ -246,11 +234,6 @@ h2,
 h3 {
   margin: 0;
   letter-spacing: 0;
-}
-
-h1 {
-  color: #f5f0e9;
-  font-size: 30px;
 }
 
 h2,
@@ -329,25 +312,6 @@ button.secondary:hover {
   gap: 10px;
 }
 
-.sideActions {
-  display: grid;
-  gap: 10px;
-}
-
-.sideActions button {
-  width: 100%;
-  background: var(--color-primary);
-  color: #fff;
-  border-color: var(--color-primary);
-}
-
-.hint {
-  margin-top: auto;
-  color: #d9cbc2;
-  font-size: 13px;
-  line-height: 1.45;
-}
-
 main {
   min-width: 0;
   min-height: 0;
@@ -367,9 +331,9 @@ main {
 
 .filters {
   display: grid;
-  grid-template-columns: minmax(190px, 1fr) 130px 130px 142px 104px;
+  grid-template-columns: minmax(190px, 1fr) 130px 130px 142px 104px 126px;
   gap: 10px;
-  width: min(880px, 100%);
+  width: min(1020px, 100%);
 }
 
 .statusbar {
@@ -404,6 +368,28 @@ main {
   white-space: nowrap;
 }
 
+.viewSwitch {
+  display: inline-flex;
+  height: 34px;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.viewSwitch button {
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-soft);
+}
+
+.viewSwitch button.active {
+  background: var(--color-primary);
+  color: var(--color-text-inverse);
+}
+
 .tableShell {
   min-height: 0;
   overflow: auto;
@@ -411,6 +397,10 @@ main {
   border-radius: var(--radius-md);
   background: var(--color-surface);
   box-shadow: var(--shadow-sm);
+}
+
+.tableShell.hidden {
+  display: none;
 }
 
 table {
@@ -568,6 +558,89 @@ tr.dirty {
   text-align: center;
 }
 
+.gridShell {
+  min-height: 0;
+  display: none;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 14px;
+  overflow: auto;
+}
+
+.gridShell.active {
+  display: grid;
+}
+
+.gridEmpty {
+  grid-column: 1 / -1;
+  display: grid;
+  place-items: center;
+}
+
+.productCard {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: 190px minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.productCard.dirty {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(166, 119, 47, 0.16);
+}
+
+.cardImage {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: var(--color-input-bg);
+}
+
+.cardImage img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.cardImage span {
+  color: var(--color-text-soft);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.cardBody {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.cardFields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.cardFields label {
+  gap: 4px;
+  color: var(--color-text-soft);
+  font-size: 11px;
+}
+
+.cardActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cardActions button {
+  height: 34px;
+}
+
 .modalOverlay {
   position: fixed;
   inset: 0;
@@ -601,14 +674,6 @@ tr.dirty {
 }
 
 @media (max-width: 980px) {
-  .appShell {
-    grid-template-columns: 1fr;
-  }
-
-  .sidebar {
-    display: none;
-  }
-
   .toolbar,
   .statusbar {
     align-items: stretch;
@@ -616,6 +681,10 @@ tr.dirty {
   }
 
   .filters {
+    grid-template-columns: 1fr;
+  }
+
+  .cardFields {
     grid-template-columns: 1fr;
   }
 }

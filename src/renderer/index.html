@@ -36,6 +36,8 @@
           <button class="menuTrigger" type="button">Visualizza</button>
           <div class="menuPanel">
             <button id="themeToggleButton" type="button">Tema scuro</button>
+            <button id="listViewButton" type="button">Vista elenco</button>
+            <button id="gridViewButton" type="button">Vista griglia</button>
             <button id="menuUpdateButton" type="button">Controlla aggiornamenti</button>
           </div>
         </div>
@@ -44,21 +46,6 @@
     </header>
 
     <div class="appShell">
-      <aside class="sidebar">
-        <div>
-          <p class="eyebrow">WooCommerce</p>
-          <h1>Magazzino</h1>
-        </div>
-
-        <nav class="sideActions">
-          <button id="settingsButton" type="button">Impostazioni</button>
-        </nav>
-
-        <div class="hint">
-          Le chiavi si creano in WordPress: WooCommerce, Impostazioni, Avanzate, REST API.
-        </div>
-      </aside>
-
       <main>
         <header class="toolbar">
           <div>
@@ -80,6 +67,7 @@
               <option value="onbackorder">In arretrato</option>
             </select>
             <button id="refreshButton" type="button">Aggiorna</button>
+            <button id="settingsButton" class="secondary" type="button">Impostazioni</button>
           </div>
         </header>
 
@@ -89,6 +77,10 @@
             <span id="updateText">Aggiornamenti non controllati.</span>
           </div>
           <div class="pager">
+            <div class="viewSwitch" aria-label="Scelta vista prodotti">
+              <button id="inlineListViewButton" class="active" type="button">Elenco</button>
+              <button id="inlineGridViewButton" type="button">Griglia</button>
+            </div>
             <button id="updateButton" class="secondary" type="button">Aggiornamenti</button>
             <button id="prevButton" class="secondary" type="button">Indietro</button>
             <span id="pageText">Pagina 1</span>
@@ -118,6 +110,8 @@
             </tbody>
           </table>
         </section>
+
+        <section id="gridShell" class="gridShell" aria-label="Prodotti in griglia"></section>
       </main>
     </div>
 
@@ -141,6 +135,9 @@
         </label>
         <div class="settingsHint">
           I dati restano salvati su questo PC e puoi modificarli da qui in qualsiasi momento.
+        </div>
+        <div class="settingsHint">
+          Le chiavi si creano in WordPress: WooCommerce, Impostazioni, Avanzate, REST API.
         </div>
         <div class="buttonRow">
           <button type="submit">Salva</button>
