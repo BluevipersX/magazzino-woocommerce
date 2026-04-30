@@ -1,0 +1,64 @@
+{
+  "name": "magazzino-woocommerce",
+  "version": "0.1.0",
+  "description": "App Windows semplice per gestire prezzi e quantita prodotti WooCommerce.",
+  "author": "BluevipersX",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "dist": "electron-builder --win nsis",
+    "dist:dir": "electron-builder --win nsis --dir",
+    "release": "electron-builder --win nsis --publish always"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BluevipersX/magazzino-woocommerce.git"
+  },
+  "build": {
+    "appId": "it.magazzino.woocommerce",
+    "productName": "Magazzino WooCommerce",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName} Setup ${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Magazzino WooCommerce"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "BluevipersX",
+        "repo": "magazzino-woocommerce",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2"
+  },
+  "devDependencies": {
+    "electron-builder": "^26.0.12",
+    "electron": "^41.3.0"
+  }
+}
