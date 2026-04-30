@@ -374,9 +374,7 @@ async function readProductCache() {
       cachedPages: [],
       updatedAt: "",
       ...cache,
-      cachedPages: Array.isArray(cache.cachedPages)
-        ? cache.cachedPages
-        : Array.from({ length: Math.ceil(Number(cache.processedProducts || 0) / 100) }, (_item, index) => index + 1)
+      cachedPages: Array.isArray(cache.cachedPages) ? cache.cachedPages : []
     };
   } catch {
     return { storeUrl: "", complete: false, total: 0, processedProducts: 0, rows: [], cachedPages: [], updatedAt: "" };
@@ -623,7 +621,13 @@ function rowKey(row) {
 
 function mergeRows(existingRows = [], nextRows = []) {
   const map = new Map(existingRows.map((row) => [rowKey(row), row]));
-  for (const row of nextRows) map.set(rowKey(row), row);
+  for (const row of nextRows) {
+    const key = rowKey(row);
+    const existing = map.get(key);
+    map.set(key, existing && existing.cachePage && !row.cachePage
+      ? { ...row, cachePage: existing.cachePage }
+      : row);
+  }
   return Array.from(map.values());
 }
 
@@ -692,15 +696,79 @@ async function getAttributeFilterConfig() {
   return attributeFilterCache;
 }
 
-async function fetchProductRowsPage(page) {
-  const result = await wooRequest("products", {
-    query: {
-      page,
-      per_page: 100,
-      status: "publish",
-      _fields: productFields
+function findTermSlug(filterConfig, type, selectedSlug) {
+  const normalized = normalizeSlug(selectedSlug);
+  const config = filterConfig && filterConfig[type];
+  const term = config && (config.terms || []).find((item) => normalizeSlug(item.slug || item.name) === normalized);
+  return term ? term.slug : selectedSlug;
+}
+
+async function productQueryFilters(params = {}) {
+  const search = String(params.search || "").trim();
+  const stockStatus = String(params.stockStatus || "");
+  const setTerm = String(params.setTerm || "").trim();
+  const languageTerm = String(params.languageTerm || "").trim();
+  const query = {};
+
+  if (search) {
+    query.search = search;
+    query.search_fields = "name,sku";
+  }
+
+  if (stockStatus) query.stock_status = stockStatus;
+
+  if (setTerm || languageTerm) {
+    const filterConfig = await getAttributeFilterConfig();
+    const attributes = [];
+
+    if (setTerm && filterConfig.set) {
+      attributes.push({
+        attribute: filterConfig.set.queryName,
+        slug: findTermSlug(filterConfig, "set", setTerm)
+      });
     }
-  });
+
+    if (languageTerm && filterConfig.language) {
+      attributes.push({
+        attribute: filterConfig.language.queryName,
+        slug: findTermSlug(filterConfig, "language", languageTerm)
+      });
+    }
+
+    if (attributes.length) {
+      query.attributes = JSON.stringify(attributes);
+      query.attribute_relation = "and";
+    }
+  }
+
+  return query;
+}
+
+async function fetchProductRowsPage(page, params = {}) {
+  const filters = await productQueryFilters(params);
+  let useLocalAttributeFilter = false;
+  let query = {
+    page,
+    per_page: 100,
+    status: "publish",
+    _fields: productFields,
+    ...filters
+  };
+  let result = null;
+
+  try {
+    result = await wooRequest("products", { query });
+  } catch (error) {
+    if (!query.search_fields && !query.attributes) throw error;
+    query = { ...query };
+    delete query.search_fields;
+    if (query.attributes) {
+      delete query.attributes;
+      delete query.attribute_relation;
+      useLocalAttributeFilter = Boolean(params.setTerm || params.languageTerm);
+    }
+    result = await wooRequest("products", { query });
+  }
 
   const pageRows = await mapLimit(result.data || [], 3, async (product) => {
     if (product.type === "variable") {
@@ -717,11 +785,14 @@ async function fetchProductRowsPage(page) {
       bytes: 0
     };
   });
-  const rows = pageRows.flatMap((item) => item.rows);
+  let rows = pageRows.flatMap((item) => item.rows);
+  if (useLocalAttributeFilter) {
+    rows = filterCachedRows(rows, params);
+  }
   const bytes = (result.bytes || 0) + pageRows.reduce((total, item) => total + (item.bytes || 0), 0);
 
   return {
-    rows: rows.map((row) => ({ ...row, cachePage: page })),
+    rows: rows.map((row) => ({ ...row, cachePage: params.cachePage || null })),
     bytes,
     processedProducts: (result.data || []).length,
     total: result.total,
@@ -832,118 +903,6 @@ async function refreshModifiedProducts(cache) {
   })();
 }
 
-async function syncProductCache() {
-  if (productCachePromise) return productCachePromise;
-
-  productCachePromise = (async () => {
-    const config = await readConfig();
-    ensureConfig(config);
-    const existingCache = await readProductCache();
-    const canResume = existingCache.storeUrl === config.storeUrl
-      && !existingCache.complete
-      && existingCache.processedProducts > 0
-      && existingCache.total > 0
-      && Array.isArray(existingCache.rows);
-    const cache = canResume ? existingCache : {
-      storeUrl: config.storeUrl,
-      complete: false,
-      total: 0,
-      processedProducts: 0,
-      rows: [],
-      cachedPages: [],
-      updatedAt: new Date().toISOString()
-    };
-    productCacheStats = {
-      startedAt: Date.now(),
-      downloadedBytes: canResume ? Number(existingCache.downloadedBytes || 0) : 0
-    };
-
-    sendCacheStatus({
-      syncing: true,
-      complete: false,
-      cached: cache.processedProducts || 0,
-      total: cache.total || 0,
-      rows: cache.rows.length,
-      message: canResume ? "Riprendo generazione cache prodotti..." : "Genero cache prodotti..."
-    });
-
-    try {
-      let totalPages = Math.max(Math.ceil((cache.total || 0) / 100), 1);
-      let startPage = canResume ? Math.floor((cache.processedProducts || 0) / 100) + 1 : 1;
-
-      for (let page = startPage; page <= totalPages; page += 1) {
-        const nextPage = await fetchProductRowsPage(page);
-        productCacheStats.downloadedBytes += nextPage.bytes || 0;
-        if (!cache.total) cache.total = nextPage.total;
-        totalPages = nextPage.totalPages || totalPages;
-        cache.rows.push(...nextPage.rows);
-        cache.cachedPages = Array.from(new Set([...(cache.cachedPages || []), page])).sort((a, b) => a - b);
-        cache.processedProducts = Math.min((cache.processedProducts || 0) + nextPage.processedProducts, cache.total || 0);
-        cache.downloadedBytes = productCacheStats.downloadedBytes;
-        cache.updatedAt = new Date().toISOString();
-        if (page === 1 || page % 5 === 0 || page === totalPages) {
-          await writeProductCache(cache);
-        }
-        const progress = cacheProgressText(cache.processedProducts, cache.total);
-        const initialText = page === 1 && !canResume ? "Cache iniziale pronta" : "Genero cache";
-        sendCacheStatus({
-          syncing: true,
-          complete: false,
-          cached: cache.processedProducts,
-          total: cache.total,
-          rows: cache.rows.length,
-          downloadedBytes: progress.downloadedBytes,
-          estimatedTotalBytes: progress.estimatedTotalBytes,
-          bytesPerSecond: progress.bytesPerSecond,
-          etaSeconds: progress.etaSeconds,
-          message: `${initialText}: ${cache.processedProducts}/${cache.total} prodotti base - ${cache.rows.length} righe cache - ${progress.text}`
-        });
-      }
-
-      cache.complete = true;
-      cache.updatedAt = new Date().toISOString();
-      await writeProductCache(cache);
-      const finalProgress = cacheProgressText(cache.processedProducts, cache.total);
-      sendCacheStatus({
-        syncing: false,
-        complete: true,
-        cached: cache.processedProducts,
-        total: cache.total,
-        rows: cache.rows.length,
-        downloadedBytes: finalProgress.downloadedBytes,
-        estimatedTotalBytes: finalProgress.downloadedBytes,
-        bytesPerSecond: finalProgress.bytesPerSecond,
-        etaSeconds: 0,
-        message: `Cache completa: ${cache.total} prodotti base, ${cache.rows.length} righe cache - ${formatBytes(finalProgress.downloadedBytes)} scaricati.`
-      });
-    } catch (error) {
-      const cachedCount = cache.processedProducts || 0;
-      const errorProgress = cacheProgressText(cachedCount, cache.total);
-      if (cache.rows.length) {
-        cache.updatedAt = new Date().toISOString();
-        await writeProductCache(cache);
-      }
-      sendCacheStatus({
-        syncing: false,
-        cached: cachedCount,
-        total: cache.total,
-        rows: cache.rows.length,
-        downloadedBytes: errorProgress.downloadedBytes,
-        estimatedTotalBytes: errorProgress.estimatedTotalBytes,
-        bytesPerSecond: errorProgress.bytesPerSecond,
-        etaSeconds: errorProgress.etaSeconds,
-        message: cachedCount
-          ? `Cache parziale salvata (${cachedCount}/${cache.total} prodotti base, ${cache.rows.length} righe cache - ${errorProgress.text}). Riprovero al prossimo avvio: ${error.message}`
-          : `Cache non aggiornata: ${error.message}`
-      });
-    } finally {
-      productCachePromise = null;
-    }
-  })();
-
-  return productCachePromise;
-}
-
 async function ensureProductCache() {
   const config = await readConfig();
   ensureConfig(config);
@@ -1018,40 +977,64 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
   let cache = await ensureProductCache();
   let rows = cache.rows || [];
   const hasFilters = Boolean(search || stockStatus || setTerm || languageTerm);
+  let remoteTotal = 0;
 
-  if (!hasFilters && !(cache.cachedPages || []).includes(page)) {
+  if (hasFilters || !(cache.cachedPages || []).includes(page)) {
     productCacheStats = {
       startedAt: Date.now(),
       downloadedBytes: 0
     };
-    const pageRows = await fetchProductRowsPage(page);
+    sendCacheStatus({
+      syncing: true,
+      complete: false,
+      cached: cache.cachedPages ? cache.cachedPages.length : 0,
+      total: cache.total || 0,
+      rows: cache.rows ? cache.rows.length : 0,
+      message: hasFilters ? "Cerco prodotti su WooCommerce..." : `Carico pagina ${page} da WooCommerce...`
+    });
+
+    const pageRows = await fetchProductRowsPage(page, {
+      search,
+      stockStatus,
+      setTerm,
+      languageTerm,
+      cachePage: hasFilters ? null : page
+    });
+    remoteTotal = pageRows.total;
     productCacheStats.downloadedBytes += pageRows.bytes || 0;
     const config = await readConfig();
+    const nextRows = mergeRows(rows, pageRows.rows);
     const nextCache = {
       storeUrl: config.storeUrl,
       complete: false,
-      total: pageRows.total,
-      processedProducts: Math.min(Math.max(Number(cache.processedProducts || 0), page * 100), pageRows.total || page * 100),
-      rows: mergeRows(rows, pageRows.rows),
-      cachedPages: Array.from(new Set([...(cache.cachedPages || []), page])).sort((a, b) => a - b),
+      total: hasFilters ? (cache.total || pageRows.total) : pageRows.total,
+      processedProducts: hasFilters
+        ? Number(cache.processedProducts || 0)
+        : Math.min(Math.max(Number(cache.processedProducts || 0), page * 100), pageRows.total || page * 100),
+      rows: nextRows,
+      cachedPages: hasFilters
+        ? (cache.cachedPages || [])
+        : Array.from(new Set([...(cache.cachedPages || []), page])).sort((a, b) => a - b),
       downloadedBytes: productCacheStats.downloadedBytes,
       updatedAt: new Date().toISOString()
     };
     await writeProductCache(nextCache);
     cache = nextCache;
     rows = pageRows.rows;
-    const progress = cacheProgressText(Math.min(page * 100, nextCache.total), nextCache.total);
+    const progress = cacheProgressText(Math.min(page * 100, pageRows.total || nextCache.total), pageRows.total || nextCache.total);
     sendCacheStatus({
       syncing: false,
       complete: false,
-      cached: nextCache.cachedPages.length * 100,
+      cached: hasFilters ? nextCache.cachedPages.length : nextCache.cachedPages.length * 100,
       total: nextCache.total,
       rows: nextCache.rows.length,
       downloadedBytes: progress.downloadedBytes,
       estimatedTotalBytes: progress.estimatedTotalBytes,
       bytesPerSecond: progress.bytesPerSecond,
       etaSeconds: progress.etaSeconds,
-      message: `Pagina ${page} salvata in cache. Cache locale: ${nextCache.cachedPages.length} pagine, ${nextCache.rows.length} righe.`
+      message: hasFilters
+        ? `Ricerca salvata in cache: ${pageRows.rows.length} righe trovate. Cache locale: ${nextCache.rows.length} righe.`
+        : `Pagina ${page} salvata in cache. Cache locale: ${nextCache.cachedPages.length} pagine, ${nextCache.rows.length} righe.`
     });
   }
 
@@ -1059,20 +1042,18 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
     ? rows.filter((row) => row.cachePage === page)
     : paginateRows(rows, page, pageSize);
   const sourceRows = hasFilters ? rows : ((cache.cachedPages || []).includes(page) ? pageRowsFromCache : rows);
-  const filteredRows = hasFilters
-    ? filterCachedRows(sourceRows, { search, stockStatus, setTerm, languageTerm })
-    : sourceRows;
+  const filteredRows = hasFilters ? rows : sourceRows;
 
   if (!productCachePromise && cache.updatedAt) {
     refreshModifiedProducts(cache);
   }
 
   return {
-    rows: hasFilters ? paginateRows(filteredRows, page, pageSize) : filteredRows,
+    rows: filteredRows,
     page,
-    total: hasFilters ? filteredRows.length : (cache.total || filteredRows.length),
+    total: hasFilters ? (remoteTotal || filteredRows.length) : (cache.total || filteredRows.length),
     totalPages: hasFilters
-      ? Math.max(Math.ceil(filteredRows.length / pageSize), 1)
+      ? Math.max(Math.ceil((remoteTotal || filteredRows.length) / pageSize), 1)
       : Math.max(Math.ceil((cache.total || filteredRows.length) / pageSize), 1)
   };
 });
