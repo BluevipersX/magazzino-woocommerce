@@ -40,6 +40,7 @@ const productFields = [
   "stock_status",
   "manage_stock",
   "permalink",
+  "date_modified_gmt",
   "attributes"
 ].join(",");
 const variationFields = [
@@ -51,6 +52,7 @@ const variationFields = [
   "stock_quantity",
   "stock_status",
   "manage_stock",
+  "date_modified_gmt",
   "attributes"
 ].join(",");
 
@@ -362,9 +364,22 @@ async function writeConfig(config) {
 async function readProductCache() {
   try {
     const raw = await fs.readFile(productCachePath(), "utf8");
-    return JSON.parse(raw);
+    const cache = JSON.parse(raw);
+    return {
+      storeUrl: "",
+      complete: false,
+      total: 0,
+      processedProducts: 0,
+      rows: [],
+      cachedPages: [],
+      updatedAt: "",
+      ...cache,
+      cachedPages: Array.isArray(cache.cachedPages)
+        ? cache.cachedPages
+        : Array.from({ length: Math.ceil(Number(cache.processedProducts || 0) / 100) }, (_item, index) => index + 1)
+    };
   } catch {
-    return { storeUrl: "", complete: false, total: 0, rows: [], updatedAt: "" };
+    return { storeUrl: "", complete: false, total: 0, processedProducts: 0, rows: [], cachedPages: [], updatedAt: "" };
   }
 }
 
@@ -530,6 +545,7 @@ function productRow(product, variation = null) {
     stockStatus: item.stock_status || "",
     manageStock: Boolean(item.manage_stock),
     permalink: product.permalink || "",
+    modifiedAt: item.date_modified_gmt || product.date_modified_gmt || "",
     attributes: normalizeRowAttributes(product, variation)
   };
 }
@@ -599,6 +615,16 @@ function filterCachedRows(rows, params) {
 function paginateRows(rows, page, pageSize) {
   const start = (page - 1) * pageSize;
   return rows.slice(start, start + pageSize);
+}
+
+function rowKey(row) {
+  return `${row.parentId || 0}:${row.id}`;
+}
+
+function mergeRows(existingRows = [], nextRows = []) {
+  const map = new Map(existingRows.map((row) => [rowKey(row), row]));
+  for (const row of nextRows) map.set(rowKey(row), row);
+  return Array.from(map.values());
 }
 
 async function mapLimit(items, limit, mapper) {
@@ -695,12 +721,53 @@ async function fetchProductRowsPage(page) {
   const bytes = (result.bytes || 0) + pageRows.reduce((total, item) => total + (item.bytes || 0), 0);
 
   return {
-    rows,
+    rows: rows.map((row) => ({ ...row, cachePage: page })),
     bytes,
     processedProducts: (result.data || []).length,
     total: result.total,
     totalPages: result.totalPages
   };
+}
+
+async function fetchModifiedRows(modifiedAfter) {
+  const rows = [];
+  let total = 0;
+  let totalPages = 1;
+  let bytes = 0;
+
+  for (let page = 1; page <= totalPages; page += 1) {
+    const result = await wooRequest("products", {
+      query: {
+        page,
+        per_page: 100,
+        status: "publish",
+        modified_after: modifiedAfter,
+        dates_are_gmt: true,
+        _fields: productFields
+      }
+    });
+    total = result.total;
+    totalPages = result.totalPages;
+    bytes += result.bytes || 0;
+
+    const pageRows = await mapLimit(result.data || [], 3, async (product) => {
+      if (product.type === "variable") {
+        const variations = await wooRequest(`products/${product.id}/variations`, {
+          query: { per_page: 100, _fields: variationFields }
+        });
+        return {
+          rows: (variations.data || []).map((variation) => productRow(product, variation)),
+          bytes: variations.bytes || 0
+        };
+      }
+      return { rows: [productRow(product)], bytes: 0 };
+    });
+
+    rows.push(...pageRows.flatMap((item) => item.rows));
+    bytes += pageRows.reduce((sum, item) => sum + (item.bytes || 0), 0);
+  }
+
+  return { rows, total, bytes };
 }
 
 async function getRemoteProductTotal() {
@@ -712,6 +779,57 @@ async function getRemoteProductTotal() {
     }
   });
   return result.total;
+}
+
+async function refreshModifiedProducts(cache) {
+  if (!cache.updatedAt || productCachePromise) return;
+
+  productCachePromise = (async () => {
+    try {
+      sendCacheStatus({
+        syncing: false,
+        complete: Boolean(cache.complete),
+        cached: cache.processedProducts || cache.total || cache.rows.length,
+        total: cache.total || cache.rows.length,
+        rows: cache.rows.length,
+        message: "Controllo modifiche prodotti..."
+      });
+
+      const modified = await fetchModifiedRows(cache.updatedAt);
+      if (modified.rows.length) {
+        const freshCache = await readProductCache();
+        freshCache.rows = mergeRows(freshCache.rows, modified.rows);
+        freshCache.updatedAt = new Date().toISOString();
+        await writeProductCache(freshCache);
+        sendCacheStatus({
+          syncing: false,
+          complete: Boolean(freshCache.complete),
+          cached: freshCache.processedProducts || freshCache.total || freshCache.rows.length,
+          total: freshCache.total || freshCache.rows.length,
+          rows: freshCache.rows.length,
+          message: `Cache aggiornata: ${modified.rows.length} righe modificate.`
+        });
+      } else {
+        cache.updatedAt = new Date().toISOString();
+        await writeProductCache(cache);
+        sendCacheStatus({
+          syncing: false,
+          complete: Boolean(cache.complete),
+          cached: cache.processedProducts || cache.total || cache.rows.length,
+          total: cache.total || cache.rows.length,
+          rows: cache.rows.length,
+          message: "Cache gia aggiornata."
+        });
+      }
+    } catch (error) {
+      sendCacheStatus({
+        syncing: false,
+        message: `Controllo modifiche non riuscito: ${error.message}`
+      });
+    } finally {
+      productCachePromise = null;
+    }
+  })();
 }
 
 async function syncProductCache() {
@@ -732,6 +850,7 @@ async function syncProductCache() {
       total: 0,
       processedProducts: 0,
       rows: [],
+      cachedPages: [],
       updatedAt: new Date().toISOString()
     };
     productCacheStats = {
@@ -758,6 +877,7 @@ async function syncProductCache() {
         if (!cache.total) cache.total = nextPage.total;
         totalPages = nextPage.totalPages || totalPages;
         cache.rows.push(...nextPage.rows);
+        cache.cachedPages = Array.from(new Set([...(cache.cachedPages || []), page])).sort((a, b) => a - b);
         cache.processedProducts = Math.min((cache.processedProducts || 0) + nextPage.processedProducts, cache.total || 0);
         cache.downloadedBytes = productCacheStats.downloadedBytes;
         cache.updatedAt = new Date().toISOString();
@@ -851,18 +971,6 @@ async function ensureProductCache() {
       : `Cache parziale: ${cache.processedProducts || 0}/${cache.total || 0} prodotti base, ${cache.rows.length} righe cache.`
   });
 
-  if (!cache.complete && !productCachePromise) {
-    syncProductCache();
-  }
-
-  if (cache.complete && !productCachePromise) {
-    getRemoteProductTotal()
-      .then((total) => {
-        if (total !== cache.total) syncProductCache();
-      })
-      .catch(() => {});
-  }
-
   return cache;
 }
 
@@ -907,53 +1015,65 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
   const setTerm = String(params.setTerm || "").trim();
   const languageTerm = String(params.languageTerm || "").trim();
   const pageSize = 100;
-  const cache = await ensureProductCache();
+  let cache = await ensureProductCache();
   let rows = cache.rows || [];
+  const hasFilters = Boolean(search || stockStatus || setTerm || languageTerm);
 
-  if (!rows.length) {
+  if (!hasFilters && !(cache.cachedPages || []).includes(page)) {
     productCacheStats = {
       startedAt: Date.now(),
       downloadedBytes: 0
     };
-    const firstPage = await fetchProductRowsPage(1);
-    productCacheStats.downloadedBytes += firstPage.bytes || 0;
+    const pageRows = await fetchProductRowsPage(page);
+    productCacheStats.downloadedBytes += pageRows.bytes || 0;
     const config = await readConfig();
-    const firstCache = {
+    const nextCache = {
       storeUrl: config.storeUrl,
-      complete: firstPage.totalPages <= 1,
-      total: firstPage.total,
-      processedProducts: Math.min(firstPage.processedProducts, firstPage.total || firstPage.processedProducts),
-      rows: firstPage.rows,
+      complete: false,
+      total: pageRows.total,
+      processedProducts: Math.min(Math.max(Number(cache.processedProducts || 0), page * 100), pageRows.total || page * 100),
+      rows: mergeRows(rows, pageRows.rows),
+      cachedPages: Array.from(new Set([...(cache.cachedPages || []), page])).sort((a, b) => a - b),
       downloadedBytes: productCacheStats.downloadedBytes,
       updatedAt: new Date().toISOString()
     };
-    await writeProductCache(firstCache);
-    rows = firstCache.rows;
-    const firstProgress = cacheProgressText(firstCache.processedProducts, firstCache.total);
+    await writeProductCache(nextCache);
+    cache = nextCache;
+    rows = pageRows.rows;
+    const progress = cacheProgressText(Math.min(page * 100, nextCache.total), nextCache.total);
     sendCacheStatus({
-      syncing: !firstCache.complete,
-      complete: firstCache.complete,
-      cached: firstCache.processedProducts,
-      total: firstCache.total,
-      rows: rows.length,
-      downloadedBytes: firstProgress.downloadedBytes,
-      estimatedTotalBytes: firstCache.complete ? firstProgress.downloadedBytes : firstProgress.estimatedTotalBytes,
-      bytesPerSecond: firstProgress.bytesPerSecond,
-      etaSeconds: firstCache.complete ? 0 : firstProgress.etaSeconds,
-      message: firstCache.complete
-        ? `Cache completa: ${firstCache.total} prodotti base, ${rows.length} righe cache - ${formatBytes(firstProgress.downloadedBytes)} scaricati.`
-        : `Cache iniziale pronta: ${firstCache.processedProducts}/${firstCache.total} prodotti base - ${rows.length} righe cache - ${firstProgress.text}`
+      syncing: false,
+      complete: false,
+      cached: nextCache.cachedPages.length * 100,
+      total: nextCache.total,
+      rows: nextCache.rows.length,
+      downloadedBytes: progress.downloadedBytes,
+      estimatedTotalBytes: progress.estimatedTotalBytes,
+      bytesPerSecond: progress.bytesPerSecond,
+      etaSeconds: progress.etaSeconds,
+      message: `Pagina ${page} salvata in cache. Cache locale: ${nextCache.cachedPages.length} pagine, ${nextCache.rows.length} righe.`
     });
-    if (!firstCache.complete) syncProductCache();
   }
 
-  const filteredRows = filterCachedRows(rows, { search, stockStatus, setTerm, languageTerm });
+  const pageRowsFromCache = rows.some((row) => row.cachePage)
+    ? rows.filter((row) => row.cachePage === page)
+    : paginateRows(rows, page, pageSize);
+  const sourceRows = hasFilters ? rows : ((cache.cachedPages || []).includes(page) ? pageRowsFromCache : rows);
+  const filteredRows = hasFilters
+    ? filterCachedRows(sourceRows, { search, stockStatus, setTerm, languageTerm })
+    : sourceRows;
+
+  if (!productCachePromise && cache.updatedAt) {
+    refreshModifiedProducts(cache);
+  }
 
   return {
-    rows: paginateRows(filteredRows, page, pageSize),
+    rows: hasFilters ? paginateRows(filteredRows, page, pageSize) : filteredRows,
     page,
-    total: filteredRows.length,
-    totalPages: Math.max(Math.ceil(filteredRows.length / pageSize), 1)
+    total: hasFilters ? filteredRows.length : (cache.total || filteredRows.length),
+    totalPages: hasFilters
+      ? Math.max(Math.ceil(filteredRows.length / pageSize), 1)
+      : Math.max(Math.ceil((cache.total || filteredRows.length) / pageSize), 1)
   };
 });
 
