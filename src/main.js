@@ -9,6 +9,7 @@ let startupUpdateInProgress = false;
 let updateState = "Aggiornamenti non controllati.";
 const windowIcon = path.join(__dirname, "..", "build", "icon.ico");
 const appLogo = path.join(__dirname, "..", "build", "icon.png");
+const releaseApiUrl = "https://api.github.com/repos/BluevipersX/magazzino-woocommerce/releases";
 
 const createWindow = () => {
   mainWindow = new BrowserWindow({
@@ -169,6 +170,72 @@ function setupAutoUpdates() {
   });
 }
 
+function parseVersion(value) {
+  return String(value || "")
+    .replace(/^v/i, "")
+    .split(".")
+    .map((part) => Number.parseInt(part, 10) || 0);
+}
+
+function compareVersions(a, b) {
+  const left = parseVersion(a);
+  const right = parseVersion(b);
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const diff = (left[index] || 0) - (right[index] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function releaseHasUpdateAssets(release) {
+  const assets = release.assets || [];
+  return assets.some((asset) => asset.name === "latest.yml")
+    && assets.some((asset) => asset.name.endsWith(".exe"))
+    && assets.some((asset) => asset.name.endsWith(".blockmap"));
+}
+
+async function getHighestPublishedRelease() {
+  const response = await fetch(`${releaseApiUrl}?per_page=100`, {
+    headers: {
+      "Accept": "application/vnd.github+json",
+      "User-Agent": "Magazzino-WooCommerce"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`GitHub release ${response.status}`);
+  }
+
+  const releases = await response.json();
+  return releases
+    .filter((release) => !release.draft && !release.prerelease && releaseHasUpdateAssets(release))
+    .sort((a, b) => compareVersions(b.tag_name, a.tag_name))[0] || null;
+}
+
+async function configureHighestReleaseFeed() {
+  const release = await getHighestPublishedRelease();
+  if (!release) {
+    sendUpdateState("Nessuna release pubblicata disponibile.");
+    return false;
+  }
+
+  const latestVersion = parseVersion(release.tag_name).join(".");
+  const currentVersion = app.getVersion();
+  if (compareVersions(latestVersion, currentVersion) <= 0) {
+    sendUpdateState("App aggiornata.");
+    return false;
+  }
+
+  const releaseFeedUrl = `https://github.com/BluevipersX/magazzino-woocommerce/releases/download/${release.tag_name}/`;
+  autoUpdater.setFeedURL({
+    provider: "generic",
+    url: releaseFeedUrl
+  });
+  sendUpdateState(`Aggiornamento ${latestVersion} disponibile. Download in corso...`);
+  return true;
+}
+
 async function checkForUpdates() {
   if (!app.isPackaged) {
     sendUpdateState("Aggiornamenti attivi nella versione installata.");
@@ -176,6 +243,8 @@ async function checkForUpdates() {
   }
 
   sendUpdateState("Controllo aggiornamenti all'avvio...");
+  const hasRemoteUpdate = await configureHighestReleaseFeed();
+  if (!hasRemoteUpdate) return false;
   await autoUpdater.checkForUpdates();
   return true;
 }
@@ -199,6 +268,11 @@ async function checkForUpdatesBeforeStartup() {
 
   startupUpdateInProgress = true;
   sendUpdateState("Controllo aggiornamenti prima dell'avvio...");
+  const hasRemoteUpdate = await configureHighestReleaseFeed();
+  if (!hasRemoteUpdate) {
+    setTimeout(openMainAfterStartupCheck, 800);
+    return;
+  }
   await autoUpdater.checkForUpdates();
 }
 
