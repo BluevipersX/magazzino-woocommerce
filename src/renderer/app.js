@@ -122,7 +122,8 @@ async function loadConfig() {
   if (!config.storeUrl || !config.consumerKey || !config.consumerSecret) {
     openSettings();
   } else {
-    setStatus("Configurazione caricata. Premi Aggiorna per leggere i prodotti.", "ok");
+    setStatus("Configurazione caricata. Caricamento prodotti...", "ok");
+    await loadProducts(1);
   }
 }
 
@@ -207,6 +208,7 @@ els.configForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
     await saveConfig();
+    await loadProducts(1);
   } catch (error) {
     setStatus(error.message || "Errore configurazione.", "error");
   }

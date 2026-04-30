@@ -24,6 +24,11 @@ const createWindow = () => {
   });
 
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+  mainWindow.webContents.once("did-finish-load", () => {
+    setTimeout(() => {
+      checkForUpdates().catch((error) => sendUpdateState(`Aggiornamenti non disponibili: ${error.message}`));
+    }, 2000);
+  });
 };
 
 function sendUpdateState(message) {
@@ -81,6 +86,7 @@ async function checkForUpdates() {
     return false;
   }
 
+  sendUpdateState("Controllo aggiornamenti all'avvio...");
   await autoUpdater.checkForUpdates();
   return true;
 }
@@ -88,9 +94,6 @@ async function checkForUpdates() {
 app.whenReady().then(async () => {
   createWindow();
   setupAutoUpdates();
-  setTimeout(() => {
-    checkForUpdates().catch((error) => sendUpdateState(`Aggiornamenti non disponibili: ${error.message}`));
-  }, 1500);
 });
 
 app.on("window-all-closed", () => {
