@@ -589,6 +589,68 @@ tr.dirty {
   display: grid;
 }
 
+.cacheOverlay {
+  position: fixed;
+  inset: 78px 0 0;
+  z-index: 80;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(13, 13, 13, 0.34);
+  backdrop-filter: blur(2px);
+}
+
+.cacheOverlay.open {
+  display: flex;
+}
+
+.cacheOverlayPanel {
+  width: min(430px, 100%);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid rgba(166, 119, 47, 0.55);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  box-shadow: var(--shadow-lg);
+}
+
+.cacheOverlayPanel div:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.cacheOverlayPanel strong {
+  color: var(--color-primary-soft);
+  font-size: 13px;
+  text-transform: uppercase;
+}
+
+.cacheOverlayPanel span {
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.cacheSpinner {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border: 3px solid rgba(166, 119, 47, 0.2);
+  border-top-color: var(--color-primary);
+  border-radius: 999px;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .gridEmpty {
   grid-column: 1 / -1;
   display: grid;

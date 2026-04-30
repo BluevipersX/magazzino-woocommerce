@@ -43,6 +43,8 @@ const els = {
   pageText: document.querySelector("#pageText"),
   statusText: document.querySelector("#statusText"),
   cacheText: document.querySelector("#cacheText"),
+  cacheOverlay: document.querySelector("#cacheOverlay"),
+  cacheOverlayText: document.querySelector("#cacheOverlayText"),
   productBody: document.querySelector("#productBody"),
   tableShell: document.querySelector(".tableShell"),
   gridShell: document.querySelector("#gridShell")
@@ -55,7 +57,11 @@ function setStatus(message, tone = "normal") {
 
 function setCacheStatus(status = {}) {
   state.cacheSyncing = Boolean(status.syncing);
-  els.cacheText.textContent = status.message || "Cache prodotti non inizializzata.";
+  const message = status.message || "Cache prodotti non inizializzata.";
+  els.cacheText.textContent = message;
+  els.cacheOverlayText.textContent = message;
+  els.cacheOverlay.classList.toggle("open", state.cacheSyncing);
+  els.cacheOverlay.setAttribute("aria-hidden", state.cacheSyncing ? "false" : "true");
   els.cacheText.dataset.tone = status.syncing ? "busy" : status.complete ? "ok" : "normal";
   renderRows();
 }
