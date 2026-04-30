@@ -28,6 +28,7 @@ let productCacheStats = {
   startedAt: 0,
   downloadedBytes: 0
 };
+const diagnosticLog = [];
 const productFields = [
   "id",
   "type",
@@ -55,6 +56,16 @@ const variationFields = [
   "date_modified_gmt",
   "attributes"
 ].join(",");
+
+function addDiagnostic(event, detail = "") {
+  const entry = {
+    time: new Date().toISOString(),
+    event,
+    detail: String(detail || "").replace(/(consumer_(key|secret)|ck_[a-z0-9]+|cs_[a-z0-9]+)/gi, "[redatto]")
+  };
+  diagnosticLog.push(entry);
+  if (diagnosticLog.length > 200) diagnosticLog.splice(0, diagnosticLog.length - 200);
+}
 
 const createWindow = () => {
   mainWindow = new BrowserWindow({
@@ -155,6 +166,7 @@ const createStartupWindow = () => {
 
 function sendUpdateState(message) {
   updateState = message;
+  addDiagnostic("updates", message);
   if (startupWindow && !startupWindow.isDestroyed()) {
     startupWindow.webContents.executeJavaScript(
       `document.getElementById("message").textContent = ${JSON.stringify(message)};`
@@ -386,6 +398,69 @@ async function writeProductCache(cache) {
   await fs.writeFile(productCachePath(), JSON.stringify(cache, null, 2), "utf8");
 }
 
+async function getCacheInfo() {
+  const cache = await readProductCache();
+  let size = 0;
+  let exists = false;
+  try {
+    const stats = await fs.stat(productCachePath());
+    size = stats.size;
+    exists = true;
+  } catch {}
+
+  return {
+    exists,
+    path: productCachePath(),
+    cachedPages: Array.isArray(cache.cachedPages) ? cache.cachedPages : [],
+    rows: Array.isArray(cache.rows) ? cache.rows.length : 0,
+    total: Number(cache.total || 0),
+    updatedAt: cache.updatedAt || "",
+    size
+  };
+}
+
+async function clearProductCache() {
+  try {
+    await fs.rm(productCachePath(), { force: true });
+  } catch {}
+  sendCacheStatus({
+    syncing: false,
+    complete: false,
+    cached: 0,
+    total: 0,
+    rows: 0,
+    downloadedBytes: 0,
+    estimatedTotalBytes: 0,
+    bytesPerSecond: 0,
+    etaSeconds: 0,
+    message: "Cache prodotti svuotata."
+  });
+  addDiagnostic("cache", "Cache prodotti svuotata.");
+  return getCacheInfo();
+}
+
+async function refreshCachePage(page) {
+  const targetPage = Math.max(Number(page || 1), 1);
+  const cache = await readProductCache();
+  const nextCache = {
+    ...cache,
+    rows: (cache.rows || []).filter((row) => row.cachePage !== targetPage),
+    cachedPages: (cache.cachedPages || []).filter((cachedPage) => cachedPage !== targetPage),
+    updatedAt: new Date().toISOString()
+  };
+  await writeProductCache(nextCache);
+  addDiagnostic("cache", `Pagina ${targetPage} invalidata dalla cache.`);
+  sendCacheStatus({
+    syncing: false,
+    complete: false,
+    cached: nextCache.cachedPages.length,
+    total: nextCache.total || 0,
+    rows: nextCache.rows.length,
+    message: `Pagina ${targetPage} rimossa dalla cache.`
+  });
+  return getCacheInfo();
+}
+
 function sendCacheStatus(status) {
   productCacheStatus = { ...productCacheStatus, ...status };
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -497,6 +572,7 @@ async function wooRequest(pathname, options = {}) {
         throw new Error(message);
       }
 
+      addDiagnostic("woocommerce", `${method} ${pathname} OK (${response.status})`);
       return {
         data,
         bytes,
@@ -505,6 +581,7 @@ async function wooRequest(pathname, options = {}) {
       };
     } catch (error) {
       lastError = error;
+      addDiagnostic("woocommerce", `${method} ${pathname} errore: ${error.message}`);
       if (attempt >= retries) break;
       await sleep(650 * attempt);
     } finally {
@@ -880,6 +957,7 @@ async function refreshModifiedProducts(cache) {
           rows: freshCache.rows.length,
           message: `Cache aggiornata: ${modified.rows.length} righe modificate.`
         });
+        addDiagnostic("cache", `Aggiornate ${modified.rows.length} righe modificate.`);
       } else {
         cache.updatedAt = new Date().toISOString();
         await writeProductCache(cache);
@@ -891,8 +969,10 @@ async function refreshModifiedProducts(cache) {
           rows: cache.rows.length,
           message: "Cache gia aggiornata."
         });
+        addDiagnostic("cache", "Controllo modifiche completato: nessuna modifica.");
       }
     } catch (error) {
+      addDiagnostic("cache", `Controllo modifiche non riuscito: ${error.message}`);
       sendCacheStatus({
         syncing: false,
         message: `Controllo modifiche non riuscito: ${error.message}`
@@ -941,6 +1021,10 @@ ipcMain.handle("config:save", async (_event, config) => {
 ipcMain.handle("updates:state", async () => updateState);
 ipcMain.handle("updates:check", async () => checkForUpdates());
 ipcMain.handle("cache:status", async () => productCacheStatus);
+ipcMain.handle("cache:info", async () => getCacheInfo());
+ipcMain.handle("cache:clear", async () => clearProductCache());
+ipcMain.handle("cache:refresh-page", async (_event, page) => refreshCachePage(page));
+ipcMain.handle("diagnostics:get", async () => diagnosticLog.map((entry) => `[${entry.time}] ${entry.event}: ${entry.detail}`).join("\n"));
 ipcMain.handle("window:minimize", () => mainWindow.minimize());
 ipcMain.handle("window:toggle-maximize", () => {
   if (mainWindow.isMaximized()) mainWindow.unmaximize();
@@ -960,6 +1044,7 @@ ipcMain.handle("app:show-help", () => dialog.showMessageBox(mainWindow, {
 
 ipcMain.handle("woo:test", async () => {
   await wooRequest("products", { query: { per_page: 1 } });
+  addDiagnostic("woocommerce", "Test collegamento riuscito.");
   return true;
 });
 
@@ -980,6 +1065,7 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
   let remoteTotal = 0;
 
   if (hasFilters || !(cache.cachedPages || []).includes(page)) {
+    addDiagnostic("cache", hasFilters ? `Ricerca remota pagina ${page}.` : `Cache miss pagina ${page}.`);
     productCacheStats = {
       startedAt: Date.now(),
       downloadedBytes: 0
@@ -1036,6 +1122,8 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
         ? `Ricerca salvata in cache: ${pageRows.rows.length} righe trovate. Cache locale: ${nextCache.rows.length} righe.`
         : `Pagina ${page} salvata in cache. Cache locale: ${nextCache.cachedPages.length} pagine, ${nextCache.rows.length} righe.`
     });
+  } else {
+    addDiagnostic("cache", `Cache hit pagina ${page}.`);
   }
 
   const pageRowsFromCache = rows.some((row) => row.cachePage)
@@ -1078,6 +1166,7 @@ ipcMain.handle("products:update", async (_event, row) => {
     method: "PUT",
     body
   });
+  addDiagnostic("products", `Prodotto ${row.parentId ? `${row.parentId}/` : ""}${row.id} salvato.`);
 
   const cache = await readProductCache();
   if (cache.rows && cache.rows.length) {

@@ -25,12 +25,21 @@ const els = {
   themeToggleButton: document.querySelector("#themeToggleButton"),
   configForm: document.querySelector("#configForm"),
   configModal: document.querySelector("#configModal"),
+  diagnosticsModal: document.querySelector("#diagnosticsModal"),
   settingsButton: document.querySelector("#settingsButton"),
   closeSettingsButton: document.querySelector("#closeSettingsButton"),
   storeUrl: document.querySelector("#storeUrl"),
   consumerKey: document.querySelector("#consumerKey"),
   consumerSecret: document.querySelector("#consumerSecret"),
   testButton: document.querySelector("#testButton"),
+  clearCacheButton: document.querySelector("#clearCacheButton"),
+  refreshCachePageButton: document.querySelector("#refreshCachePageButton"),
+  diagnosticsButton: document.querySelector("#diagnosticsButton"),
+  cacheInfoText: document.querySelector("#cacheInfoText"),
+  diagnosticsText: document.querySelector("#diagnosticsText"),
+  refreshDiagnosticsButton: document.querySelector("#refreshDiagnosticsButton"),
+  copyDiagnosticsButton: document.querySelector("#copyDiagnosticsButton"),
+  closeDiagnosticsButton: document.querySelector("#closeDiagnosticsButton"),
   searchInput: document.querySelector("#searchInput"),
   setFilter: document.querySelector("#setFilter"),
   languageFilter: document.querySelector("#languageFilter"),
@@ -100,6 +109,7 @@ function hasConfig() {
 function openSettings() {
   els.configModal.classList.add("open");
   els.configModal.setAttribute("aria-hidden", "false");
+  refreshCacheInfo();
   setTimeout(() => els.storeUrl.focus(), 0);
 }
 
@@ -114,6 +124,31 @@ function closeSettings() {
 
 function setUpdateStatus(message) {
   els.updateText.textContent = message;
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+
+async function refreshCacheInfo() {
+  const info = await window.magazzino.getCacheInfo();
+  const pages = info.cachedPages && info.cachedPages.length ? info.cachedPages.join(", ") : "nessuna";
+  const updatedAt = info.updatedAt ? new Date(info.updatedAt).toLocaleString("it-IT") : "mai";
+  els.cacheInfoText.textContent = `Pagine: ${pages}. Righe: ${info.rows}. Totale sito: ${info.total || "-"}. Ultimo update: ${updatedAt}. File: ${info.exists ? formatBytes(info.size) : "non presente"} - ${info.path}`;
+}
+
+async function openDiagnostics() {
+  els.diagnosticsModal.classList.add("open");
+  els.diagnosticsModal.setAttribute("aria-hidden", "false");
+  els.diagnosticsText.value = await window.magazzino.getDiagnostics();
+}
+
+function closeDiagnostics() {
+  els.diagnosticsModal.classList.remove("open");
+  els.diagnosticsModal.setAttribute("aria-hidden", "true");
 }
 
 function setLoading(loading) {
@@ -410,7 +445,48 @@ els.configModal.addEventListener("click", (event) => {
   if (event.target === els.configModal) closeSettings();
 });
 
+els.clearCacheButton.addEventListener("click", async () => {
+  try {
+    setStatus("Svuoto cache prodotti...");
+    await window.magazzino.clearCache();
+    await refreshCacheInfo();
+    setStatus("Cache svuotata. Ricarico la prima pagina.", "ok");
+    await loadProducts(1);
+  } catch (error) {
+    setStatus(error.message || "Impossibile svuotare la cache.", "error");
+  }
+});
+
+els.refreshCachePageButton.addEventListener("click", async () => {
+  try {
+    setStatus(`Ricarico cache pagina ${state.page}...`);
+    await window.magazzino.refreshCachePage(state.page);
+    await refreshCacheInfo();
+    await loadProducts(state.page);
+    setStatus(`Pagina ${state.page} ricaricata da WooCommerce.`, "ok");
+  } catch (error) {
+    setStatus(error.message || "Impossibile ricaricare la pagina.", "error");
+  }
+});
+
+els.diagnosticsButton.addEventListener("click", openDiagnostics);
+els.refreshDiagnosticsButton.addEventListener("click", async () => {
+  els.diagnosticsText.value = await window.magazzino.getDiagnostics();
+});
+els.copyDiagnosticsButton.addEventListener("click", async () => {
+  els.diagnosticsText.select();
+  await navigator.clipboard.writeText(els.diagnosticsText.value);
+});
+els.closeDiagnosticsButton.addEventListener("click", closeDiagnostics);
+els.diagnosticsModal.addEventListener("click", (event) => {
+  if (event.target === els.diagnosticsModal) closeDiagnostics();
+});
+
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && els.diagnosticsModal.classList.contains("open")) {
+    closeDiagnostics();
+    return;
+  }
   if (event.key === "Escape" && els.configModal.classList.contains("open")) {
     closeSettings();
   }
@@ -486,6 +562,7 @@ window.magazzino.isWindowMaximized().then((isMaximized) => {
 });
 window.magazzino.getUpdateState().then(setUpdateStatus);
 window.magazzino.getCacheStatus().then(setCacheStatus);
+refreshCacheInfo().catch(() => {});
 applyTheme(state.theme);
 setProductView(localStorage.getItem("productView") || "list");
 loadConfig();

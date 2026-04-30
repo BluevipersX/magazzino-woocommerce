@@ -154,12 +154,38 @@
         <div class="settingsHint">
           Le chiavi si creano in WordPress: WooCommerce, Impostazioni, Avanzate, REST API.
         </div>
+        <section class="settingsSection">
+          <div>
+            <p class="eyebrow">Cache prodotti</p>
+            <div id="cacheInfoText" class="settingsHint">Cache non letta.</div>
+          </div>
+          <div class="buttonRow">
+            <button id="clearCacheButton" class="secondary" type="button">Svuota cache</button>
+            <button id="refreshCachePageButton" class="secondary" type="button">Ricarica pagina</button>
+            <button id="diagnosticsButton" class="secondary" type="button">Diagnostica</button>
+          </div>
+        </section>
         <div class="buttonRow">
           <button type="submit">Salva</button>
           <button id="testButton" class="secondary" type="button">Test</button>
           <button id="closeSettingsButton" class="secondary" type="button">Chiudi</button>
         </div>
       </form>
+    </div>
+
+    <div id="diagnosticsModal" class="modalOverlay" aria-hidden="true">
+      <section class="settingsDialog diagnosticsDialog">
+        <div>
+          <p class="eyebrow">Diagnostica</p>
+          <h3>Ultimi eventi app</h3>
+        </div>
+        <textarea id="diagnosticsText" readonly spellcheck="false"></textarea>
+        <div class="buttonRow">
+          <button id="refreshDiagnosticsButton" class="secondary" type="button">Aggiorna</button>
+          <button id="copyDiagnosticsButton" class="secondary" type="button">Copia</button>
+          <button id="closeDiagnosticsButton" type="button">Chiudi</button>
+        </div>
+      </section>
     </div>
 
     <script src="app.js"></script>
