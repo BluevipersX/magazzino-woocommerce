@@ -16,7 +16,7 @@ const els = {
   menuRefreshButton: document.querySelector("#menuRefreshButton"),
   menuQuitButton: document.querySelector("#menuQuitButton"),
   menuUpdateButton: document.querySelector("#menuUpdateButton"),
-  menuRepoButton: document.querySelector("#menuRepoButton"),
+  helpButton: document.querySelector("#helpButton"),
   themeToggleButton: document.querySelector("#themeToggleButton"),
   configForm: document.querySelector("#configForm"),
   configModal: document.querySelector("#configModal"),
@@ -312,7 +312,7 @@ els.updateButton.addEventListener("click", async () => {
 });
 els.menuUpdateButton.addEventListener("click", () => els.updateButton.click());
 els.themeToggleButton.addEventListener("click", toggleTheme);
-els.menuRepoButton.addEventListener("click", () => window.magazzino.openRepository());
+els.helpButton.addEventListener("click", () => window.magazzino.showHelp());
 els.menuQuitButton.addEventListener("click", () => window.magazzino.quitApp());
 els.minimizeButton.addEventListener("click", () => window.magazzino.minimizeWindow());
 els.maximizeButton.addEventListener("click", async () => {

@@ -176,6 +176,10 @@ body {
   padding: 0 12px;
 }
 
+.menuAction {
+  align-self: center;
+}
+
 .menuTrigger:hover,
 .menuItem:focus-within .menuTrigger,
 .menuItem:hover .menuTrigger {

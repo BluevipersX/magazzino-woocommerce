@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("magazzino", {
   isWindowMaximized: () => ipcRenderer.invoke("window:is-maximized"),
   quitApp: () => ipcRenderer.invoke("app:quit"),
   openRepository: () => ipcRenderer.invoke("app:open-repository"),
+  showHelp: () => ipcRenderer.invoke("app:show-help"),
   onUpdateState: (callback) => {
     const listener = (_event, message) => callback(message);
     ipcRenderer.on("updates:state", listener);
