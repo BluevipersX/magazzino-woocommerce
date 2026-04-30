@@ -7,7 +7,8 @@ let mainWindow;
 let startupWindow;
 let startupUpdateInProgress = false;
 let updateState = "Aggiornamenti non controllati.";
-const windowIcon = path.join(__dirname, "..", "build", "icon.png");
+const windowIcon = path.join(__dirname, "..", "build", "icon.ico");
+const appLogo = path.join(__dirname, "..", "build", "icon.png");
 
 const createWindow = () => {
   mainWindow = new BrowserWindow({
@@ -32,7 +33,7 @@ const createWindow = () => {
 };
 
 const createStartupWindow = () => {
-  const iconUrl = `file:///${windowIcon.replace(/\\/g, "/")}`;
+  const iconDataUrl = `data:image/png;base64,${require("fs").readFileSync(appLogo).toString("base64")}`;
   startupWindow = new BrowserWindow({
     width: 460,
     height: 240,
@@ -96,7 +97,7 @@ const createStartupWindow = () => {
       </head>
       <body>
         <main>
-          <img src="${iconUrl}" alt="">
+          <img src="${iconDataUrl}" alt="">
           <h1>Controllo aggiornamenti</h1>
           <p id="message">Preparazione avvio...</p>
           <div class="bar"><span></span></div>
