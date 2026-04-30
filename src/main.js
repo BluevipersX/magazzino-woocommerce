@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const fs = require("fs/promises");
@@ -15,6 +15,7 @@ const createWindow = () => {
     minHeight: 720,
     title: "Magazzino WooCommerce",
     icon: windowIcon,
+    frame: false,
     backgroundColor: "#f4f7f5",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -24,6 +25,8 @@ const createWindow = () => {
   });
 
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+  mainWindow.on("maximize", () => mainWindow.webContents.send("window:maximized", true));
+  mainWindow.on("unmaximize", () => mainWindow.webContents.send("window:maximized", false));
   mainWindow.webContents.once("did-finish-load", () => {
     setTimeout(() => {
       checkForUpdates().catch((error) => sendUpdateState(`Aggiornamenti non disponibili: ${error.message}`));
@@ -92,6 +95,7 @@ async function checkForUpdates() {
 }
 
 app.whenReady().then(async () => {
+  Menu.setApplicationMenu(null);
   createWindow();
   setupAutoUpdates();
 });
@@ -203,6 +207,16 @@ ipcMain.handle("config:get", readConfig);
 ipcMain.handle("config:save", async (_event, config) => writeConfig(config));
 ipcMain.handle("updates:state", async () => updateState);
 ipcMain.handle("updates:check", async () => checkForUpdates());
+ipcMain.handle("window:minimize", () => mainWindow.minimize());
+ipcMain.handle("window:toggle-maximize", () => {
+  if (mainWindow.isMaximized()) mainWindow.unmaximize();
+  else mainWindow.maximize();
+  return mainWindow.isMaximized();
+});
+ipcMain.handle("window:close", () => mainWindow.close());
+ipcMain.handle("window:is-maximized", () => mainWindow.isMaximized());
+ipcMain.handle("app:quit", () => app.quit());
+ipcMain.handle("app:open-repository", () => shell.openExternal("https://github.com/BluevipersX/magazzino-woocommerce"));
 
 ipcMain.handle("woo:test", async () => {
   await wooRequest("products", { query: { per_page: 1 } });

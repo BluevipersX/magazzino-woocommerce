@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="it">
+<html lang="it" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,74 +7,117 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <aside class="sidebar">
-      <div>
-        <p class="eyebrow">WooCommerce</p>
-        <h1>Magazzino</h1>
+    <header class="appChrome">
+      <div class="titleBar">
+        <div class="titleBrand">
+          <img src="../../build/icon.png" alt="" />
+          <div>
+            <span>King of Ten</span>
+            <strong>Magazzino WooCommerce</strong>
+          </div>
+        </div>
+        <div class="windowControls">
+          <button id="minimizeButton" type="button" title="Riduci a icona">_</button>
+          <button id="maximizeButton" type="button" title="Massimizza">[ ]</button>
+          <button id="closeButton" class="closeControl" type="button" title="Chiudi">X</button>
+        </div>
       </div>
 
-      <nav class="sideActions">
-        <button id="settingsButton" type="button">Impostazioni</button>
+      <nav class="menuBar" aria-label="Menu applicazione">
+        <div class="menuItem">
+          <button class="menuTrigger" type="button">File</button>
+          <div class="menuPanel">
+            <button id="menuSettingsButton" type="button">Impostazioni</button>
+            <button id="menuRefreshButton" type="button">Aggiorna prodotti</button>
+            <button id="menuQuitButton" type="button">Esci</button>
+          </div>
+        </div>
+        <div class="menuItem">
+          <button class="menuTrigger" type="button">Visualizza</button>
+          <div class="menuPanel">
+            <button id="themeToggleButton" type="button">Tema scuro</button>
+            <button id="menuUpdateButton" type="button">Controlla aggiornamenti</button>
+          </div>
+        </div>
+        <div class="menuItem">
+          <button class="menuTrigger" type="button">Aiuto</button>
+          <div class="menuPanel">
+            <button id="menuRepoButton" type="button">Repository GitHub</button>
+          </div>
+        </div>
       </nav>
+    </header>
 
-      <div class="hint">
-        Le chiavi si creano in WordPress: WooCommerce, Impostazioni, Avanzate, REST API.
-      </div>
-    </aside>
-
-    <main>
-      <header class="toolbar">
+    <div class="appShell">
+      <aside class="sidebar">
         <div>
-          <p class="eyebrow">Prodotti e varianti</p>
-          <h2>Prezzi e quantità</h2>
+          <p class="eyebrow">WooCommerce</p>
+          <h1>Magazzino</h1>
         </div>
-        <div class="filters">
-          <input id="searchInput" type="search" placeholder="Cerca nome o SKU" />
-          <select id="stockFilter">
-            <option value="">Tutti</option>
-            <option value="instock">Disponibili</option>
-            <option value="outofstock">Esauriti</option>
-            <option value="onbackorder">In arretrato</option>
-          </select>
-          <button id="refreshButton" type="button">Aggiorna</button>
-        </div>
-      </header>
 
-      <section class="statusbar">
-        <div class="statusStack">
-          <span id="statusText">Configura il negozio per iniziare.</span>
-          <span id="updateText">Aggiornamenti non controllati.</span>
-        </div>
-        <div class="pager">
-          <button id="updateButton" class="secondary" type="button">Aggiornamenti</button>
-          <button id="prevButton" class="secondary" type="button">Indietro</button>
-          <span id="pageText">Pagina 1</span>
-          <button id="nextButton" class="secondary" type="button">Avanti</button>
-        </div>
-      </section>
+        <nav class="sideActions">
+          <button id="settingsButton" type="button">Impostazioni</button>
+        </nav>
 
-      <section class="tableShell">
-        <table>
-          <thead>
-            <tr>
-              <th>Prodotto</th>
-              <th>SKU</th>
-              <th>Tipo</th>
-              <th>Prezzo</th>
-              <th>Sconto</th>
-              <th>Quantità</th>
-              <th>Stato</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="productBody">
-            <tr>
-              <td colspan="8" class="empty">Nessun prodotto caricato.</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-    </main>
+        <div class="hint">
+          Le chiavi si creano in WordPress: WooCommerce, Impostazioni, Avanzate, REST API.
+        </div>
+      </aside>
+
+      <main>
+        <header class="toolbar">
+          <div>
+            <p class="eyebrow">Prodotti e varianti</p>
+            <h2>Prezzi e quantita</h2>
+          </div>
+          <div class="filters">
+            <input id="searchInput" type="search" placeholder="Cerca nome o SKU" />
+            <select id="stockFilter">
+              <option value="">Tutti</option>
+              <option value="instock">Disponibili</option>
+              <option value="outofstock">Esauriti</option>
+              <option value="onbackorder">In arretrato</option>
+            </select>
+            <button id="refreshButton" type="button">Aggiorna</button>
+          </div>
+        </header>
+
+        <section class="statusbar">
+          <div class="statusStack">
+            <span id="statusText">Configura il negozio per iniziare.</span>
+            <span id="updateText">Aggiornamenti non controllati.</span>
+          </div>
+          <div class="pager">
+            <button id="updateButton" class="secondary" type="button">Aggiornamenti</button>
+            <button id="prevButton" class="secondary" type="button">Indietro</button>
+            <span id="pageText">Pagina 1</span>
+            <button id="nextButton" class="secondary" type="button">Avanti</button>
+          </div>
+        </section>
+
+        <section class="tableShell">
+          <table>
+            <thead>
+              <tr>
+                <th>Prodotto</th>
+                <th>SKU</th>
+                <th>Tipo</th>
+                <th>Prezzo</th>
+                <th>Sconto</th>
+                <th>Quantita</th>
+                <th>Stato</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="productBody">
+              <tr>
+                <td colspan="8" class="empty">Nessun prodotto caricato.</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </main>
+    </div>
 
     <div id="configModal" class="modalOverlay" aria-hidden="true">
       <form id="configForm" class="settingsDialog">

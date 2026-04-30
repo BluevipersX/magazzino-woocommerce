@@ -4,10 +4,20 @@ const state = {
   totalPages: 1,
   loading: false,
   requestId: 0,
-  searchTimer: null
+  searchTimer: null,
+  theme: localStorage.getItem("theme") || "light"
 };
 
 const els = {
+  minimizeButton: document.querySelector("#minimizeButton"),
+  maximizeButton: document.querySelector("#maximizeButton"),
+  closeButton: document.querySelector("#closeButton"),
+  menuSettingsButton: document.querySelector("#menuSettingsButton"),
+  menuRefreshButton: document.querySelector("#menuRefreshButton"),
+  menuQuitButton: document.querySelector("#menuQuitButton"),
+  menuUpdateButton: document.querySelector("#menuUpdateButton"),
+  menuRepoButton: document.querySelector("#menuRepoButton"),
+  themeToggleButton: document.querySelector("#themeToggleButton"),
   configForm: document.querySelector("#configForm"),
   configModal: document.querySelector("#configModal"),
   settingsButton: document.querySelector("#settingsButton"),
@@ -30,7 +40,18 @@ const els = {
 
 function setStatus(message, tone = "normal") {
   els.statusText.textContent = message;
-  els.statusText.style.color = tone === "error" ? "#a23b3b" : tone === "ok" ? "#0d5b47" : "";
+  els.statusText.dataset.tone = tone;
+}
+
+function applyTheme(theme) {
+  state.theme = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = state.theme;
+  localStorage.setItem("theme", state.theme);
+  els.themeToggleButton.textContent = state.theme === "dark" ? "Tema chiaro" : "Tema scuro";
+}
+
+function toggleTheme() {
+  applyTheme(state.theme === "dark" ? "light" : "dark");
 }
 
 function hasConfig() {
@@ -215,6 +236,7 @@ els.configForm.addEventListener("submit", async (event) => {
 });
 
 els.settingsButton.addEventListener("click", openSettings);
+els.menuSettingsButton.addEventListener("click", openSettings);
 els.closeSettingsButton.addEventListener("click", closeSettings);
 
 els.testButton.addEventListener("click", async () => {
@@ -244,6 +266,7 @@ document.addEventListener("keydown", (event) => {
 });
 
 els.refreshButton.addEventListener("click", () => loadProducts(1));
+els.menuRefreshButton.addEventListener("click", () => loadProducts(1));
 els.updateButton.addEventListener("click", async () => {
   try {
     setUpdateStatus("Controllo aggiornamenti...");
@@ -252,6 +275,16 @@ els.updateButton.addEventListener("click", async () => {
     setUpdateStatus(error.message || "Aggiornamenti non disponibili.");
   }
 });
+els.menuUpdateButton.addEventListener("click", () => els.updateButton.click());
+els.themeToggleButton.addEventListener("click", toggleTheme);
+els.menuRepoButton.addEventListener("click", () => window.magazzino.openRepository());
+els.menuQuitButton.addEventListener("click", () => window.magazzino.quitApp());
+els.minimizeButton.addEventListener("click", () => window.magazzino.minimizeWindow());
+els.maximizeButton.addEventListener("click", async () => {
+  const maximized = await window.magazzino.toggleMaximizeWindow();
+  els.maximizeButton.textContent = maximized ? "[_]" : "[ ]";
+});
+els.closeButton.addEventListener("click", () => window.magazzino.closeWindow());
 els.prevButton.addEventListener("click", () => loadProducts(state.page - 1));
 els.nextButton.addEventListener("click", () => loadProducts(state.page + 1));
 els.stockFilter.addEventListener("change", () => loadProducts(1));
@@ -271,6 +304,13 @@ els.productBody.addEventListener("click", (event) => {
 });
 
 window.magazzino.onUpdateState(setUpdateStatus);
+window.magazzino.onWindowMaximized((isMaximized) => {
+  els.maximizeButton.textContent = isMaximized ? "[_]" : "[ ]";
+});
+window.magazzino.isWindowMaximized().then((isMaximized) => {
+  els.maximizeButton.textContent = isMaximized ? "[_]" : "[ ]";
+});
 window.magazzino.getUpdateState().then(setUpdateStatus);
+applyTheme(state.theme);
 loadConfig();
 renderRows();
