@@ -184,6 +184,9 @@ function productRow(product, variation = null) {
   const item = variation || product;
   const stockQuantity = item.stock_quantity === null || item.stock_quantity === undefined ? "" : item.stock_quantity;
   const sku = item.sku || product.sku || "";
+  const image = variation && variation.image && variation.image.src
+    ? variation.image
+    : (product.images && product.images.length ? product.images[0] : null);
   const name = variation
     ? `${product.name} - ${variation.attributes.map((attr) => attr.option).filter(Boolean).join(" / ")}`
     : product.name;
@@ -194,13 +197,82 @@ function productRow(product, variation = null) {
     type: variation ? "variation" : product.type,
     name,
     sku,
+    imageUrl: image && image.src ? image.src : "",
+    imageAlt: image && image.alt ? image.alt : name,
     regularPrice: item.regular_price || "",
     salePrice: item.sale_price || "",
     stockQuantity,
     stockStatus: item.stock_status || "",
     manageStock: Boolean(item.manage_stock),
-    permalink: product.permalink || ""
+    permalink: product.permalink || "",
+    attributes: normalizeRowAttributes(product, variation)
   };
+}
+
+function normalizeSlug(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^pa_/, "")
+    .replace(/[\s_-]+/g, "-");
+}
+
+function normalizeRowAttributes(product, variation = null) {
+  const rows = [];
+
+  for (const attr of product.attributes || []) {
+    const key = normalizeSlug(attr.slug || attr.name);
+    for (const option of attr.options || []) {
+      rows.push({
+        key,
+        term: normalizeSlug(option),
+        value: String(option || "")
+      });
+    }
+  }
+
+  for (const attr of (variation && variation.attributes) || []) {
+    rows.push({
+      key: normalizeSlug(attr.slug || attr.name),
+      term: normalizeSlug(attr.option),
+      value: String(attr.option || "")
+    });
+  }
+
+  return rows;
+}
+
+function rowMatchesFilters(row, filters = {}) {
+  const setTerm = normalizeSlug(filters.setTerm);
+  const languageTerm = normalizeSlug(filters.languageTerm);
+  const hasAttribute = (key, term) => !term || row.attributes.some((attr) => attr.key === key && attr.term === term);
+
+  const hasLanguage = !languageTerm
+    || hasAttribute("lingua", languageTerm)
+    || hasAttribute("language", languageTerm);
+
+  return hasAttribute("set", setTerm) && hasLanguage;
+}
+
+function findAttribute(attributes, wanted) {
+  return attributes.find((attr) => {
+    const slug = normalizeSlug(attr.slug || attr.name);
+    const name = normalizeSlug(attr.name);
+    return slug === wanted || name === wanted;
+  });
+}
+
+async function getAttributeTerms(attribute) {
+  if (!attribute) return [];
+  const result = await wooRequest(`products/attributes/${attribute.id}/terms`, {
+    query: { per_page: 100, orderby: "name", order: "asc" }
+  });
+
+  return (result.data || []).map((term) => ({
+    id: term.id,
+    name: term.name,
+    slug: term.slug
+  }));
 }
 
 ipcMain.handle("config:get", readConfig);
@@ -223,38 +295,81 @@ ipcMain.handle("woo:test", async () => {
   return true;
 });
 
+ipcMain.handle("attributes:filters", async () => {
+  const result = await wooRequest("products/attributes", { query: { per_page: 100 } });
+  const attributes = result.data || [];
+  const setAttribute = findAttribute(attributes, "set");
+  const languageAttribute = findAttribute(attributes, "lingua") || findAttribute(attributes, "language");
+
+  return {
+    set: setAttribute ? {
+      id: setAttribute.id,
+      name: setAttribute.name,
+      slug: setAttribute.slug,
+      terms: await getAttributeTerms(setAttribute)
+    } : null,
+    language: languageAttribute ? {
+      id: languageAttribute.id,
+      name: languageAttribute.name,
+      slug: languageAttribute.slug,
+      terms: await getAttributeTerms(languageAttribute)
+    } : null
+  };
+});
+
 ipcMain.handle("products:list", async (_event, params = {}) => {
   const page = Math.max(Number(params.page || 1), 1);
   const search = String(params.search || "").trim();
   const stockStatus = String(params.stockStatus || "");
-
-  const result = await wooRequest("products", {
-    query: {
-      page,
-      per_page: 50,
-      search,
-      status: "publish",
-      stock_status: stockStatus
-    }
-  });
+  const setTerm = String(params.setTerm || "").trim();
+  const languageTerm = String(params.languageTerm || "").trim();
+  const hasAttributeFilters = Boolean(setTerm || languageTerm);
 
   const rows = [];
-  for (const product of result.data || []) {
-    if (product.type === "variable") {
-      const variations = await wooRequest(`products/${product.id}/variations`, {
-        query: { per_page: 100 }
-      });
-      for (const variation of variations.data || []) rows.push(productRow(product, variation));
-    } else {
-      rows.push(productRow(product));
+  let total = 0;
+  let totalPages = 1;
+  const pagesToRead = hasAttributeFilters ? 10 : 1;
+
+  for (let currentPage = 1; currentPage <= pagesToRead; currentPage += 1) {
+    const result = await wooRequest("products", {
+      query: {
+        page: hasAttributeFilters ? currentPage : page,
+        per_page: 100,
+        search,
+        status: "publish",
+        stock_status: stockStatus
+      }
+    });
+
+    total = result.total;
+    totalPages = result.totalPages;
+
+    for (const product of result.data || []) {
+      if (product.type === "variable") {
+        const variations = await wooRequest(`products/${product.id}/variations`, {
+          query: { per_page: 100 }
+        });
+        for (const variation of variations.data || []) rows.push(productRow(product, variation));
+      } else {
+        rows.push(productRow(product));
+      }
     }
+
+    if (!hasAttributeFilters || currentPage >= result.totalPages) break;
   }
 
+  const filteredRows = rows.filter((row) => rowMatchesFilters(row, { setTerm, languageTerm }));
+  const pageSize = 100;
+  const filteredPage = hasAttributeFilters ? page : 1;
+  const pagedRows = hasAttributeFilters
+    ? filteredRows.slice((filteredPage - 1) * pageSize, filteredPage * pageSize)
+    : filteredRows;
+
   return {
-    rows,
+    rows: pagedRows,
     page,
-    total: result.total,
-    totalPages: result.totalPages
+    total: hasAttributeFilters ? filteredRows.length : total,
+    totalPages: hasAttributeFilters ? Math.max(Math.ceil(filteredRows.length / pageSize), 1) : totalPages
   };
 });
 

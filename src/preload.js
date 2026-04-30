@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld("magazzino", {
   getConfig: () => ipcRenderer.invoke("config:get"),
   saveConfig: (config) => ipcRenderer.invoke("config:save", config),
   testConnection: () => ipcRenderer.invoke("woo:test"),
+  getAttributeFilters: () => ipcRenderer.invoke("attributes:filters"),
   listProducts: (params) => ipcRenderer.invoke("products:list", params),
   updateProduct: (row) => ipcRenderer.invoke("products:update", row),
   getUpdateState: () => ipcRenderer.invoke("updates:state"),

@@ -27,6 +27,8 @@ const els = {
   consumerSecret: document.querySelector("#consumerSecret"),
   testButton: document.querySelector("#testButton"),
   searchInput: document.querySelector("#searchInput"),
+  setFilter: document.querySelector("#setFilter"),
+  languageFilter: document.querySelector("#languageFilter"),
   stockFilter: document.querySelector("#stockFilter"),
   refreshButton: document.querySelector("#refreshButton"),
   updateButton: document.querySelector("#updateButton"),
@@ -99,7 +101,7 @@ function renderRows() {
   els.nextButton.disabled = state.loading || state.page >= state.totalPages;
 
   if (!state.rows.length) {
-    els.productBody.innerHTML = `<tr><td colspan="8" class="empty">Nessun prodotto trovato.</td></tr>`;
+    els.productBody.innerHTML = `<tr><td colspan="9" class="empty">Nessun prodotto trovato.</td></tr>`;
     return;
   }
 
@@ -107,6 +109,15 @@ function renderRows() {
     .map(
       (row, index) => `
       <tr data-index="${index}">
+        <td>
+          <div class="productThumb">
+            ${
+              row.imageUrl
+                ? `<img src="${escapeAttr(row.imageUrl)}" alt="${escapeAttr(row.imageAlt || row.name)}" loading="lazy" />`
+                : `<span>N/D</span>`
+            }
+          </div>
+        </td>
         <td>
           <div class="productName">${escapeHtml(row.name)}</div>
           <div class="subtle">ID ${row.id}${row.parentId ? `, padre ${row.parentId}` : ""}</div>
@@ -144,7 +155,27 @@ async function loadConfig() {
     openSettings();
   } else {
     setStatus("Configurazione caricata. Caricamento prodotti...", "ok");
+    await loadAttributeFilters();
     await loadProducts(1);
+  }
+}
+
+function renderTerms(select, placeholder, terms = []) {
+  select.innerHTML = [
+    `<option value="">${escapeHtml(placeholder)}</option>`,
+    ...terms.map((term) => `<option value="${escapeAttr(term.slug || term.name)}">${escapeHtml(term.name)}</option>`)
+  ].join("");
+}
+
+async function loadAttributeFilters() {
+  try {
+    const filters = await window.magazzino.getAttributeFilters();
+    renderTerms(els.setFilter, "Tutti i set", filters.set ? filters.set.terms : []);
+    renderTerms(els.languageFilter, "Tutte le lingue", filters.language ? filters.language.terms : []);
+  } catch (error) {
+    renderTerms(els.setFilter, "Set non disponibili", []);
+    renderTerms(els.languageFilter, "Lingue non disponibili", []);
+    setStatus(error.message || "Impossibile leggere gli attributi.", "error");
   }
 }
 
@@ -170,6 +201,8 @@ async function loadProducts(page = state.page) {
     const result = await window.magazzino.listProducts({
       page,
       search: els.searchInput.value,
+      setTerm: els.setFilter.value,
+      languageTerm: els.languageFilter.value,
       stockStatus: els.stockFilter.value
     });
     if (requestId !== state.requestId) return;
@@ -229,6 +262,7 @@ els.configForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
     await saveConfig();
+    await loadAttributeFilters();
     await loadProducts(1);
   } catch (error) {
     setStatus(error.message || "Errore configurazione.", "error");
@@ -246,6 +280,7 @@ els.testButton.addEventListener("click", async () => {
     setStatus("Test collegamento...");
     await window.magazzino.testConnection();
     setStatus("Collegamento riuscito.", "ok");
+    await loadAttributeFilters();
     await loadProducts(1);
   } catch (error) {
     setStatus(error.message || "Collegamento non riuscito.", "error");
@@ -288,6 +323,8 @@ els.closeButton.addEventListener("click", () => window.magazzino.closeWindow());
 els.prevButton.addEventListener("click", () => loadProducts(state.page - 1));
 els.nextButton.addEventListener("click", () => loadProducts(state.page + 1));
 els.stockFilter.addEventListener("change", () => loadProducts(1));
+els.setFilter.addEventListener("change", () => loadProducts(1));
+els.languageFilter.addEventListener("change", () => loadProducts(1));
 els.searchInput.addEventListener("input", scheduleLiveSearch);
 els.searchInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") loadProducts(1);

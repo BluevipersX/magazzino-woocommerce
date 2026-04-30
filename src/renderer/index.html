@@ -72,6 +72,12 @@
           </div>
           <div class="filters">
             <input id="searchInput" type="search" placeholder="Cerca nome o SKU" />
+            <select id="setFilter">
+              <option value="">Tutti i set</option>
+            </select>
+            <select id="languageFilter">
+              <option value="">Tutte le lingue</option>
+            </select>
             <select id="stockFilter">
               <option value="">Tutti</option>
               <option value="instock">Disponibili</option>
@@ -99,6 +105,7 @@
           <table>
             <thead>
               <tr>
+                <th>Img</th>
                 <th>Prodotto</th>
                 <th>SKU</th>
                 <th>Tipo</th>
@@ -111,7 +118,7 @@
             </thead>
             <tbody id="productBody">
               <tr>
-                <td colspan="8" class="empty">Nessun prodotto caricato.</td>
+                <td colspan="9" class="empty">Nessun prodotto caricato.</td>
               </tr>
             </tbody>
           </table>
