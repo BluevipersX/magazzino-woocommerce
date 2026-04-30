@@ -9,7 +9,7 @@ let startupUpdateInProgress = false;
 let updateState = "Aggiornamenti non controllati.";
 const windowIcon = path.join(__dirname, "..", "build", "icon.ico");
 const appLogo = path.join(__dirname, "..", "build", "icon.png");
-const releaseApiUrl = "https://api.github.com/repos/BluevipersX/magazzino-woocommerce/releases";
+const latestYmlUrl = "https://github.com/BluevipersX/magazzino-woocommerce/releases/latest/download/latest.yml";
 let attributeFilterCache = null;
 let productCacheStatus = {
   syncing: false,
@@ -220,7 +220,7 @@ function setupAutoUpdates() {
   });
 
   autoUpdater.on("error", (error) => {
-    sendUpdateState(`Update non disponibile: ${error.message}`);
+    sendUpdateState(`Controllo update non riuscito: ${friendlyUpdateError(error)}`);
     if (startupUpdateInProgress) {
       setTimeout(openMainAfterStartupCheck, 1200);
     }
@@ -245,46 +245,45 @@ function compareVersions(a, b) {
   return 0;
 }
 
-function releaseHasUpdateAssets(release) {
-  const assets = release.assets || [];
-  return assets.some((asset) => asset.name === "latest.yml")
-    && assets.some((asset) => asset.name.endsWith(".exe"))
-    && assets.some((asset) => asset.name.endsWith(".blockmap"));
+function friendlyUpdateError(error) {
+  const message = String(error && error.message ? error.message : error || "");
+  if (message.includes("403")) return "GitHub temporaneamente non disponibile.";
+  if (message.includes("404")) return "release non ancora pronta.";
+  if (message.toLowerCase().includes("fetch failed")) return "connessione a GitHub non riuscita.";
+  return message || "errore sconosciuto.";
 }
 
-async function getHighestPublishedRelease() {
-  const response = await fetch(`${releaseApiUrl}?per_page=100`, {
+function parseLatestYmlVersion(text) {
+  const match = String(text || "").match(/^version:\s*["']?([^"'\r\n]+)["']?/m);
+  return match ? match[1].trim() : "";
+}
+
+async function getLatestPublishedVersion() {
+  const response = await fetch(latestYmlUrl, {
     headers: {
-      "Accept": "application/vnd.github+json",
+      "Accept": "text/yaml, text/plain, */*",
       "User-Agent": "Magazzino-WooCommerce"
     }
   });
 
   if (!response.ok) {
-    throw new Error(response.status === 403 ? "GitHub temporaneamente non disponibile" : `GitHub release ${response.status}`);
+    throw new Error(`GitHub latest.yml ${response.status}`);
   }
 
-  const releases = await response.json();
-  return releases
-    .filter((release) => !release.draft && !release.prerelease && releaseHasUpdateAssets(release))
-    .sort((a, b) => compareVersions(b.tag_name, a.tag_name))[0] || null;
+  const latestVersion = parseLatestYmlVersion(await response.text());
+  if (!latestVersion) throw new Error("latest.yml senza versione");
+  return latestVersion;
 }
 
 async function configureHighestReleaseFeed() {
-  const release = await getHighestPublishedRelease();
-  if (!release) {
-    sendUpdateState("Nessuna release pubblicata disponibile.");
-    return false;
-  }
-
-  const latestVersion = parseVersion(release.tag_name).join(".");
+  const latestVersion = await getLatestPublishedVersion();
   const currentVersion = app.getVersion();
   if (compareVersions(latestVersion, currentVersion) <= 0) {
     sendUpdateState("App aggiornata.");
     return false;
   }
 
-  const releaseFeedUrl = `https://github.com/BluevipersX/magazzino-woocommerce/releases/download/${release.tag_name}/`;
+  const releaseFeedUrl = `https://github.com/BluevipersX/magazzino-woocommerce/releases/download/v${latestVersion}/`;
   autoUpdater.setFeedURL({
     provider: "generic",
     url: releaseFeedUrl
@@ -336,7 +335,7 @@ async function checkForUpdatesBeforeStartup() {
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   checkForUpdatesBeforeStartup().catch((error) => {
-    sendUpdateState(`Update non disponibile: ${error.message}`);
+    sendUpdateState(`Controllo update non riuscito: ${friendlyUpdateError(error)}`);
     setTimeout(openMainAfterStartupCheck, 1200);
   });
 });

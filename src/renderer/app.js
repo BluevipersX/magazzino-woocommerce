@@ -125,7 +125,9 @@ function closeSettings() {
 function setUpdateStatus(message) {
   els.updateText.textContent = String(message || "")
     .replace("Aggiornamenti non disponibili:", "Update:")
-    .replace("GitHub release 403", "GitHub temporaneamente non disponibile");
+    .replace("Update non disponibile:", "Controllo update non riuscito:")
+    .replace("GitHub release 403", "GitHub temporaneamente non disponibile")
+    .replace("GitHub latest.yml 403", "GitHub temporaneamente non disponibile");
 }
 
 function formatBytes(value) {
@@ -501,7 +503,7 @@ els.updateButton.addEventListener("click", async () => {
     setUpdateStatus("Controllo aggiornamenti...");
     await window.magazzino.checkForUpdates();
   } catch (error) {
-    setUpdateStatus(error.message || "Update non disponibile.");
+    setUpdateStatus(error.message || "Controllo update non riuscito.");
   }
 });
 els.menuUpdateButton.addEventListener("click", () => els.updateButton.click());
