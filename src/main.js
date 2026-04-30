@@ -780,12 +780,19 @@ function findTermSlug(filterConfig, type, selectedSlug) {
   return term ? term.slug : selectedSlug;
 }
 
+function findTerm(filterConfig, type, selectedSlug) {
+  const normalized = normalizeSlug(selectedSlug);
+  const config = filterConfig && filterConfig[type];
+  return config && (config.terms || []).find((item) => normalizeSlug(item.slug || item.name) === normalized);
+}
+
 async function productQueryFilters(params = {}) {
   const search = String(params.search || "").trim();
   const stockStatus = String(params.stockStatus || "");
   const setTerm = String(params.setTerm || "").trim();
   const languageTerm = String(params.languageTerm || "").trim();
   const query = {};
+  let localAttributeFilter = Boolean(setTerm || languageTerm);
 
   if (search) {
     query.search = search;
@@ -796,52 +803,42 @@ async function productQueryFilters(params = {}) {
 
   if (setTerm || languageTerm) {
     const filterConfig = await getAttributeFilterConfig();
-    const attributes = [];
+    const setTermInfo = setTerm ? findTerm(filterConfig, "set", setTerm) : null;
+    const languageTermInfo = languageTerm ? findTerm(filterConfig, "language", languageTerm) : null;
 
-    if (setTerm && filterConfig.set) {
-      attributes.push({
-        attribute: filterConfig.set.queryName,
-        slug: findTermSlug(filterConfig, "set", setTerm)
-      });
-    }
-
-    if (languageTerm && filterConfig.language) {
-      attributes.push({
-        attribute: filterConfig.language.queryName,
-        slug: findTermSlug(filterConfig, "language", languageTerm)
-      });
-    }
-
-    if (attributes.length) {
-      query.attributes = JSON.stringify(attributes);
-      query.attribute_relation = "and";
+    if (setTerm && filterConfig.set && setTermInfo) {
+      query.attribute = filterConfig.set.queryName;
+      query.attribute_term = setTermInfo.id || findTermSlug(filterConfig, "set", setTerm);
+    } else if (languageTerm && filterConfig.language && languageTermInfo) {
+      query.attribute = filterConfig.language.queryName;
+      query.attribute_term = languageTermInfo.id || findTermSlug(filterConfig, "language", languageTerm);
     }
   }
 
-  return query;
+  return { query, localAttributeFilter };
 }
 
 async function fetchProductRowsPage(page, params = {}) {
   const filters = await productQueryFilters(params);
-  let useLocalAttributeFilter = false;
+  let useLocalAttributeFilter = filters.localAttributeFilter;
   let query = {
     page,
     per_page: 100,
     status: "publish",
     _fields: productFields,
-    ...filters
+    ...filters.query
   };
   let result = null;
 
   try {
     result = await wooRequest("products", { query });
   } catch (error) {
-    if (!query.search_fields && !query.attributes) throw error;
+    if (!query.search_fields && !query.attribute) throw error;
     query = { ...query };
     delete query.search_fields;
-    if (query.attributes) {
-      delete query.attributes;
-      delete query.attribute_relation;
+    if (query.attribute) {
+      delete query.attribute;
+      delete query.attribute_term;
       useLocalAttributeFilter = Boolean(params.setTerm || params.languageTerm);
     }
     result = await wooRequest("products", { query });
@@ -862,9 +859,12 @@ async function fetchProductRowsPage(page, params = {}) {
       bytes: 0
     };
   });
-  let rows = pageRows.flatMap((item) => item.rows);
+  const unfilteredRows = pageRows.flatMap((item) => item.rows);
+  let rows = unfilteredRows;
+  let filteredLocally = false;
   if (useLocalAttributeFilter) {
     rows = filterCachedRows(rows, params);
+    filteredLocally = rows.length !== unfilteredRows.length;
   }
   const bytes = (result.bytes || 0) + pageRows.reduce((total, item) => total + (item.bytes || 0), 0);
 
@@ -872,7 +872,7 @@ async function fetchProductRowsPage(page, params = {}) {
     rows: rows.map((row) => ({ ...row, cachePage: params.cachePage || null })),
     bytes,
     processedProducts: (result.data || []).length,
-    total: result.total,
+    total: filteredLocally ? rows.length : result.total,
     totalPages: result.totalPages
   };
 }
