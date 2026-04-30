@@ -381,6 +381,14 @@ function authHeader(config) {
   return `Basic ${Buffer.from(`${config.consumerKey}:${config.consumerSecret}`).toString("base64")}`;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldRetryStatus(status) {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
 async function wooRequest(pathname, options = {}) {
   const config = await readConfig();
   ensureConfig(config);
@@ -392,33 +400,61 @@ async function wooRequest(pathname, options = {}) {
     });
   }
 
-  const response = await fetch(url, {
-    method: options.method || "GET",
-    headers: {
-      Authorization: authHeader(config),
-      "Content-Type": "application/json"
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined
-  });
+  const method = options.method || "GET";
+  const retries = options.retries ?? (method === "GET" ? 4 : 1);
+  let lastError = null;
 
-  const text = await response.text();
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = text;
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), options.timeoutMs || 35000);
+
+    try {
+      const response = await fetch(url, {
+        method,
+        headers: {
+          Authorization: authHeader(config),
+          "Content-Type": "application/json"
+        },
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        signal: controller.signal
+      });
+
+      const text = await response.text();
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = text;
+      }
+
+      if (!response.ok) {
+        const message = data && data.message ? data.message : `Errore WooCommerce ${response.status}`;
+        if (attempt < retries && shouldRetryStatus(response.status)) {
+          lastError = new Error(message);
+          await sleep(650 * attempt);
+          continue;
+        }
+        throw new Error(message);
+      }
+
+      return {
+        data,
+        total: Number(response.headers.get("x-wp-total") || 0),
+        totalPages: Number(response.headers.get("x-wp-totalpages") || 1)
+      };
+    } catch (error) {
+      lastError = error;
+      if (attempt >= retries) break;
+      await sleep(650 * attempt);
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
-  if (!response.ok) {
-    const message = data && data.message ? data.message : `Errore WooCommerce ${response.status}`;
-    throw new Error(message);
-  }
-
-  return {
-    data,
-    total: Number(response.headers.get("x-wp-total") || 0),
-    totalPages: Number(response.headers.get("x-wp-totalpages") || 1)
-  };
+  const message = lastError && lastError.name === "AbortError"
+    ? "WooCommerce non risponde entro 35 secondi."
+    : (lastError && lastError.message ? lastError.message : "fetch failed");
+  throw new Error(`Connessione WooCommerce non riuscita: ${message}`);
 }
 
 function productRow(product, variation = null) {
@@ -592,7 +628,7 @@ async function fetchProductRowsPage(page) {
     }
   });
 
-  const pageRows = await mapLimit(result.data || [], 8, async (product) => {
+  const pageRows = await mapLimit(result.data || [], 3, async (product) => {
     if (product.type === "variable") {
       const variations = await wooRequest(`products/${product.id}/variations`, {
         query: { per_page: 100, _fields: variationFields }
@@ -676,9 +712,14 @@ async function syncProductCache() {
         message: `Cache completa: ${cache.rows.length} prodotti.`
       });
     } catch (error) {
+      const cachedCount = cache.rows.length;
       sendCacheStatus({
         syncing: false,
-        message: `Cache non aggiornata: ${error.message}`
+        cached: cachedCount,
+        total: cache.total,
+        message: cachedCount
+          ? `Cache parziale salvata (${cachedCount}/${cache.total} prodotti). Riprovero al prossimo avvio: ${error.message}`
+          : `Cache non aggiornata: ${error.message}`
       });
     } finally {
       productCachePromise = null;
