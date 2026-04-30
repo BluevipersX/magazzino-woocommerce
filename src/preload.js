@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld("magazzino", {
   updateProduct: (row) => ipcRenderer.invoke("products:update", row),
   getUpdateState: () => ipcRenderer.invoke("updates:state"),
   checkForUpdates: () => ipcRenderer.invoke("updates:check"),
+  getCacheStatus: () => ipcRenderer.invoke("cache:status"),
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggle-maximize"),
   closeWindow: () => ipcRenderer.invoke("window:close"),
@@ -20,6 +21,11 @@ contextBridge.exposeInMainWorld("magazzino", {
     const listener = (_event, message) => callback(message);
     ipcRenderer.on("updates:state", listener);
     return () => ipcRenderer.removeListener("updates:state", listener);
+  },
+  onCacheStatus: (callback) => {
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on("cache:status", listener);
+    return () => ipcRenderer.removeListener("cache:status", listener);
   },
   onWindowMaximized: (callback) => {
     const listener = (_event, isMaximized) => callback(isMaximized);

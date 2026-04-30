@@ -3,6 +3,7 @@ const state = {
   page: 1,
   totalPages: 1,
   loading: false,
+  cacheSyncing: false,
   requestId: 0,
   searchTimer: null,
   theme: localStorage.getItem("theme") || "light"
@@ -41,6 +42,7 @@ const els = {
   nextButton: document.querySelector("#nextButton"),
   pageText: document.querySelector("#pageText"),
   statusText: document.querySelector("#statusText"),
+  cacheText: document.querySelector("#cacheText"),
   productBody: document.querySelector("#productBody"),
   tableShell: document.querySelector(".tableShell"),
   gridShell: document.querySelector("#gridShell")
@@ -49,6 +51,13 @@ const els = {
 function setStatus(message, tone = "normal") {
   els.statusText.textContent = message;
   els.statusText.dataset.tone = tone;
+}
+
+function setCacheStatus(status = {}) {
+  state.cacheSyncing = Boolean(status.syncing);
+  els.cacheText.textContent = status.message || "Cache prodotti non inizializzata.";
+  els.cacheText.dataset.tone = status.syncing ? "busy" : status.complete ? "ok" : "normal";
+  renderRows();
 }
 
 function applyTheme(theme) {
@@ -117,6 +126,8 @@ function renderRows() {
   els.pageText.textContent = `Pagina ${state.page} di ${Math.max(state.totalPages, 1)}`;
   els.prevButton.disabled = state.loading || state.page <= 1;
   els.nextButton.disabled = state.loading || state.page >= state.totalPages;
+  const editingLocked = state.loading || state.cacheSyncing;
+  const disabledAttr = editingLocked ? "disabled" : "";
 
   if (!state.rows.length) {
     els.productBody.innerHTML = `<tr><td colspan="9" class="empty">Nessun prodotto trovato.</td></tr>`;
@@ -143,11 +154,11 @@ function renderRows() {
         </td>
         <td>${escapeHtml(row.sku || "-")}</td>
         <td>${escapeHtml(row.type)}</td>
-        <td><input class="cellInput" data-field="regularPrice" value="${escapeAttr(moneyValue(row.regularPrice))}" inputmode="decimal" /></td>
-        <td><input class="cellInput" data-field="salePrice" value="${escapeAttr(moneyValue(row.salePrice))}" inputmode="decimal" /></td>
-        <td><input class="qtyInput" data-field="stockQuantity" value="${escapeAttr(moneyValue(row.stockQuantity))}" inputmode="numeric" /></td>
+        <td><input class="cellInput" data-field="regularPrice" value="${escapeAttr(moneyValue(row.regularPrice))}" inputmode="decimal" ${disabledAttr} /></td>
+        <td><input class="cellInput" data-field="salePrice" value="${escapeAttr(moneyValue(row.salePrice))}" inputmode="decimal" ${disabledAttr} /></td>
+        <td><input class="qtyInput" data-field="stockQuantity" value="${escapeAttr(moneyValue(row.stockQuantity))}" inputmode="numeric" ${disabledAttr} /></td>
         <td><span class="badge ${escapeAttr(row.stockStatus)}">${stockLabel(row.stockStatus)}</span></td>
-        <td><button type="button" data-action="save">Salva</button></td>
+        <td><button type="button" data-action="save" ${disabledAttr}>Salva</button></td>
       </tr>
     `
     )
@@ -168,13 +179,13 @@ function renderRows() {
           <div class="productName">${escapeHtml(row.name)}</div>
           <div class="subtle">SKU ${escapeHtml(row.sku || "-")} · ID ${row.id}</div>
           <div class="cardFields">
-            <label>Prezzo<input class="cellInput" data-index="${index}" data-field="regularPrice" value="${escapeAttr(moneyValue(row.regularPrice))}" inputmode="decimal" /></label>
-            <label>Sconto<input class="cellInput" data-index="${index}" data-field="salePrice" value="${escapeAttr(moneyValue(row.salePrice))}" inputmode="decimal" /></label>
-            <label>Quantita<input class="qtyInput" data-index="${index}" data-field="stockQuantity" value="${escapeAttr(moneyValue(row.stockQuantity))}" inputmode="numeric" /></label>
+            <label>Prezzo<input class="cellInput" data-index="${index}" data-field="regularPrice" value="${escapeAttr(moneyValue(row.regularPrice))}" inputmode="decimal" ${disabledAttr} /></label>
+            <label>Sconto<input class="cellInput" data-index="${index}" data-field="salePrice" value="${escapeAttr(moneyValue(row.salePrice))}" inputmode="decimal" ${disabledAttr} /></label>
+            <label>Quantita<input class="qtyInput" data-index="${index}" data-field="stockQuantity" value="${escapeAttr(moneyValue(row.stockQuantity))}" inputmode="numeric" ${disabledAttr} /></label>
           </div>
           <div class="cardActions">
             <span class="badge ${escapeAttr(row.stockStatus)}">${stockLabel(row.stockStatus)}</span>
-            <button type="button" data-index="${index}" data-action="save-card">Salva</button>
+            <button type="button" data-index="${index}" data-action="save-card" ${disabledAttr}>Salva</button>
           </div>
         </div>
       </article>
@@ -258,7 +269,7 @@ async function loadProducts(page = state.page) {
     state.rows = result.rows;
     state.page = result.page;
     state.totalPages = result.totalPages;
-    setStatus(`${result.rows.length} righe caricate. I prodotti variabili vengono mostrati come varianti.`);
+    setStatus(`${result.total} prodotti trovati, ${result.rows.length} prodotti caricati in questa pagina. I prodotti variabili vengono mostrati come varianti.`);
   } catch (error) {
     if (requestId !== state.requestId) return;
     state.rows = [];
@@ -275,10 +286,14 @@ function scheduleLiveSearch() {
   clearTimeout(state.searchTimer);
   state.searchTimer = setTimeout(() => {
     if (hasConfig()) loadProducts(1);
-  }, 450);
+  }, 250);
 }
 
 async function saveRow(tr) {
+  if (state.cacheSyncing) {
+    setStatus("Cache prodotti in generazione. Attendi il completamento prima di modificare.", "error");
+    return;
+  }
   const index = Number(tr.dataset.index);
   const row = { ...state.rows[index] };
   tr.querySelectorAll("input[data-field]").forEach((input) => {
@@ -308,6 +323,10 @@ async function saveRow(tr) {
 }
 
 async function saveGridCard(button) {
+  if (state.cacheSyncing) {
+    setStatus("Cache prodotti in generazione. Attendi il completamento prima di modificare.", "error");
+    return;
+  }
   const index = Number(button.dataset.index);
   const card = button.closest(".productCard");
   const row = { ...state.rows[index] };
@@ -413,26 +432,29 @@ els.searchInput.addEventListener("keydown", (event) => {
 });
 
 els.productBody.addEventListener("input", (event) => {
+  if (state.cacheSyncing) return;
   const tr = event.target.closest("tr");
   if (tr) tr.classList.add("dirty");
 });
 
 els.productBody.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-action='save']");
-  if (button) saveRow(button.closest("tr"));
+  if (button && !button.disabled) saveRow(button.closest("tr"));
 });
 
 els.gridShell.addEventListener("input", (event) => {
+  if (state.cacheSyncing) return;
   const card = event.target.closest(".productCard");
   if (card) card.classList.add("dirty");
 });
 
 els.gridShell.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-action='save-card']");
-  if (button) saveGridCard(button);
+  if (button && !button.disabled) saveGridCard(button);
 });
 
 window.magazzino.onUpdateState(setUpdateStatus);
+window.magazzino.onCacheStatus(setCacheStatus);
 window.magazzino.onWindowMaximized((isMaximized) => {
   els.maximizeButton.textContent = isMaximized ? "[_]" : "[ ]";
 });
@@ -440,6 +462,7 @@ window.magazzino.isWindowMaximized().then((isMaximized) => {
   els.maximizeButton.textContent = isMaximized ? "[_]" : "[ ]";
 });
 window.magazzino.getUpdateState().then(setUpdateStatus);
+window.magazzino.getCacheStatus().then(setCacheStatus);
 applyTheme(state.theme);
 setProductView(localStorage.getItem("productView") || "list");
 loadConfig();

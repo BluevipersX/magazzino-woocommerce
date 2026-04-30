@@ -11,6 +11,14 @@ const windowIcon = path.join(__dirname, "..", "build", "icon.ico");
 const appLogo = path.join(__dirname, "..", "build", "icon.png");
 const releaseApiUrl = "https://api.github.com/repos/BluevipersX/magazzino-woocommerce/releases";
 let attributeFilterCache = null;
+let productCacheStatus = {
+  syncing: false,
+  complete: false,
+  cached: 0,
+  total: 0,
+  message: "Cache prodotti non inizializzata."
+};
+let productCachePromise = null;
 
 const createWindow = () => {
   mainWindow = new BrowserWindow({
@@ -295,6 +303,7 @@ app.on("activate", () => {
 });
 
 const configPath = () => path.join(app.getPath("userData"), "config.json");
+const productCachePath = () => path.join(app.getPath("userData"), "products-cache.json");
 
 async function readConfig() {
   try {
@@ -314,6 +323,27 @@ async function writeConfig(config) {
   await fs.mkdir(path.dirname(configPath()), { recursive: true });
   await fs.writeFile(configPath(), JSON.stringify(clean, null, 2), "utf8");
   return clean;
+}
+
+async function readProductCache() {
+  try {
+    const raw = await fs.readFile(productCachePath(), "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return { storeUrl: "", complete: false, total: 0, rows: [], updatedAt: "" };
+  }
+}
+
+async function writeProductCache(cache) {
+  await fs.mkdir(path.dirname(productCachePath()), { recursive: true });
+  await fs.writeFile(productCachePath(), JSON.stringify(cache, null, 2), "utf8");
+}
+
+function sendCacheStatus(status) {
+  productCacheStatus = { ...productCacheStatus, ...status };
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("cache:status", productCacheStatus);
+  }
 }
 
 function ensureConfig(config) {
@@ -440,6 +470,28 @@ function rowMatchesFilters(row, filters = {}) {
   return hasAttribute("set", setTerm) && hasLanguage;
 }
 
+function rowMatchesSearch(row, search) {
+  const text = normalizeSlug(`${row.name} ${row.sku} ${row.id}`);
+  return !search || text.includes(normalizeSlug(search));
+}
+
+function rowMatchesStock(row, stockStatus) {
+  return !stockStatus || row.stockStatus === stockStatus;
+}
+
+function filterCachedRows(rows, params) {
+  return rows.filter((row) => {
+    return rowMatchesSearch(row, params.search)
+      && rowMatchesStock(row, params.stockStatus)
+      && rowMatchesFilters(row, params);
+  });
+}
+
+function paginateRows(rows, page, pageSize) {
+  const start = (page - 1) * pageSize;
+  return rows.slice(start, start + pageSize);
+}
+
 function findAttribute(attributes, wanted) {
   return attributes.find((attr) => {
     const slug = normalizeSlug(attr.slug || attr.name);
@@ -489,6 +541,151 @@ async function getAttributeFilterConfig() {
   return attributeFilterCache;
 }
 
+async function fetchProductRowsPage(page) {
+  const result = await wooRequest("products", {
+    query: {
+      page,
+      per_page: 100,
+      status: "publish"
+    }
+  });
+
+  const rows = [];
+  for (const product of result.data || []) {
+    if (product.type === "variable") {
+      const variations = await wooRequest(`products/${product.id}/variations`, {
+        query: { per_page: 100 }
+      });
+      for (const variation of variations.data || []) rows.push(productRow(product, variation));
+    } else {
+      rows.push(productRow(product));
+    }
+  }
+
+  return {
+    rows,
+    total: result.total,
+    totalPages: result.totalPages
+  };
+}
+
+async function getRemoteProductTotal() {
+  const result = await wooRequest("products", {
+    query: {
+      page: 1,
+      per_page: 1,
+      status: "publish"
+    }
+  });
+  return result.total;
+}
+
+async function syncProductCache() {
+  if (productCachePromise) return productCachePromise;
+
+  productCachePromise = (async () => {
+    const config = await readConfig();
+    ensureConfig(config);
+    const cache = {
+      storeUrl: config.storeUrl,
+      complete: false,
+      total: 0,
+      rows: [],
+      updatedAt: new Date().toISOString()
+    };
+
+    sendCacheStatus({ syncing: true, complete: false, cached: 0, total: 0, message: "Genero cache prodotti..." });
+
+    try {
+      const firstPage = await fetchProductRowsPage(1);
+      cache.total = firstPage.total;
+      cache.rows = firstPage.rows;
+      cache.updatedAt = new Date().toISOString();
+      await writeProductCache(cache);
+      sendCacheStatus({
+        syncing: true,
+        complete: false,
+        cached: cache.rows.length,
+        total: cache.total,
+        message: `Cache iniziale pronta: ${cache.rows.length} prodotti. Continuo in background...`
+      });
+
+      for (let page = 2; page <= firstPage.totalPages; page += 1) {
+        const nextPage = await fetchProductRowsPage(page);
+        cache.rows.push(...nextPage.rows);
+        cache.updatedAt = new Date().toISOString();
+        await writeProductCache(cache);
+        sendCacheStatus({
+          syncing: true,
+          complete: false,
+          cached: cache.rows.length,
+          total: cache.total,
+          message: `Genero cache: ${cache.rows.length}/${cache.total} prodotti...`
+        });
+      }
+
+      cache.complete = true;
+      cache.updatedAt = new Date().toISOString();
+      await writeProductCache(cache);
+      sendCacheStatus({
+        syncing: false,
+        complete: true,
+        cached: cache.rows.length,
+        total: cache.total,
+        message: `Cache completa: ${cache.rows.length} prodotti.`
+      });
+    } catch (error) {
+      sendCacheStatus({
+        syncing: false,
+        message: `Cache non aggiornata: ${error.message}`
+      });
+    } finally {
+      productCachePromise = null;
+    }
+  })();
+
+  return productCachePromise;
+}
+
+async function ensureProductCache() {
+  const config = await readConfig();
+  ensureConfig(config);
+  const cache = await readProductCache();
+
+  if (!cache.rows || cache.storeUrl !== config.storeUrl) {
+    sendCacheStatus({
+      syncing: false,
+      complete: false,
+      cached: 0,
+      total: 0,
+      message: "Cache prodotti non inizializzata."
+    });
+    return { ...cache, rows: [] };
+  }
+
+  sendCacheStatus({
+    syncing: Boolean(productCachePromise),
+    complete: Boolean(cache.complete),
+    cached: cache.rows.length,
+    total: cache.total || cache.rows.length,
+    message: cache.complete ? `Cache pronta: ${cache.rows.length} prodotti.` : `Cache parziale: ${cache.rows.length} prodotti.`
+  });
+
+  if (!cache.complete && !productCachePromise) {
+    syncProductCache();
+  }
+
+  if (cache.complete && !productCachePromise) {
+    getRemoteProductTotal()
+      .then((total) => {
+        if (total !== cache.total) syncProductCache();
+      })
+      .catch(() => {});
+  }
+
+  return cache;
+}
+
 ipcMain.handle("config:get", readConfig);
 ipcMain.handle("config:save", async (_event, config) => {
   attributeFilterCache = null;
@@ -496,6 +693,7 @@ ipcMain.handle("config:save", async (_event, config) => {
 });
 ipcMain.handle("updates:state", async () => updateState);
 ipcMain.handle("updates:check", async () => checkForUpdates());
+ipcMain.handle("cache:status", async () => productCacheStatus);
 ipcMain.handle("window:minimize", () => mainWindow.minimize());
 ipcMain.handle("window:toggle-maximize", () => {
   if (mainWindow.isMaximized()) mainWindow.unmaximize();
@@ -528,63 +726,47 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
   const stockStatus = String(params.stockStatus || "");
   const setTerm = String(params.setTerm || "").trim();
   const languageTerm = String(params.languageTerm || "").trim();
-  const filterConfig = (setTerm || languageTerm) ? await getAttributeFilterConfig() : null;
-  const attributes = [];
+  const pageSize = 100;
+  const cache = await ensureProductCache();
+  let rows = cache.rows || [];
 
-  if (setTerm && filterConfig && filterConfig.set) {
-    attributes.push({
-      attribute: filterConfig.set.queryName,
-      slug: setTerm
+  if (!rows.length) {
+    const firstPage = await fetchProductRowsPage(1);
+    const config = await readConfig();
+    const firstCache = {
+      storeUrl: config.storeUrl,
+      complete: firstPage.totalPages <= 1,
+      total: firstPage.total,
+      rows: firstPage.rows,
+      updatedAt: new Date().toISOString()
+    };
+    await writeProductCache(firstCache);
+    rows = firstCache.rows;
+    sendCacheStatus({
+      syncing: !firstCache.complete,
+      complete: firstCache.complete,
+      cached: rows.length,
+      total: firstCache.total,
+      message: firstCache.complete ? `Cache completa: ${rows.length} prodotti.` : `Cache iniziale pronta: ${rows.length} prodotti.`
     });
+    if (!firstCache.complete) syncProductCache();
   }
 
-  if (languageTerm && filterConfig && filterConfig.language) {
-    attributes.push({
-      attribute: filterConfig.language.queryName,
-      slug: languageTerm
-    });
-  }
-
-  const rows = [];
-  const query = {
-    page,
-    per_page: 100,
-    search,
-    status: "publish",
-    stock_status: stockStatus
-  };
-
-  if (attributes.length) {
-    query.attributes = JSON.stringify(attributes);
-    query.attribute_relation = "and";
-  }
-
-  const result = await wooRequest("products", { query });
-
-  for (const product of result.data || []) {
-    if (product.type === "variable") {
-      const variations = await wooRequest(`products/${product.id}/variations`, {
-        query: { per_page: 100 }
-      });
-      for (const variation of variations.data || []) {
-        const row = productRow(product, variation);
-        if (!attributes.length || rowMatchesFilters(row, { setTerm, languageTerm })) rows.push(row);
-      }
-    } else {
-      const row = productRow(product);
-      if (!attributes.length || rowMatchesFilters(row, { setTerm, languageTerm })) rows.push(row);
-    }
-  }
+  const filteredRows = filterCachedRows(rows, { search, stockStatus, setTerm, languageTerm });
 
   return {
-    rows,
+    rows: paginateRows(filteredRows, page, pageSize),
     page,
-    total: result.total,
-    totalPages: result.totalPages
+    total: filteredRows.length,
+    totalPages: Math.max(Math.ceil(filteredRows.length / pageSize), 1)
   };
 });
 
 ipcMain.handle("products:update", async (_event, row) => {
+  if (productCacheStatus.syncing) {
+    throw new Error("Cache prodotti in generazione. Attendi il completamento prima di modificare.");
+  }
+
   const body = {
     regular_price: String(row.regularPrice ?? "").trim(),
     sale_price: String(row.salePrice ?? "").trim(),
@@ -600,6 +782,21 @@ ipcMain.handle("products:update", async (_event, row) => {
     method: "PUT",
     body
   });
+
+  const cache = await readProductCache();
+  if (cache.rows && cache.rows.length) {
+    cache.rows = cache.rows.map((cachedRow) => {
+      if (cachedRow.id !== row.id || cachedRow.parentId !== row.parentId) return cachedRow;
+      return {
+        ...cachedRow,
+        regularPrice: row.regularPrice,
+        salePrice: row.salePrice,
+        stockQuantity: row.stockQuantity
+      };
+    });
+    cache.updatedAt = new Date().toISOString();
+    await writeProductCache(cache);
+  }
 
   return true;
 });

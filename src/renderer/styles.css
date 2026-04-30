@@ -217,7 +217,9 @@ body {
 }
 
 .appShell {
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
   display: block;
 }
 
@@ -313,8 +315,10 @@ button.secondary:hover {
 }
 
 main {
+  height: 100%;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   padding: 20px;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -357,6 +361,19 @@ main {
 #updateText {
   color: var(--color-text-soft);
   font-size: 12px;
+}
+
+#cacheText {
+  color: var(--color-text-soft);
+  font-size: 12px;
+}
+
+#cacheText[data-tone="busy"] {
+  color: var(--color-warning);
+}
+
+#cacheText[data-tone="ok"] {
+  color: var(--color-success);
 }
 
 .pager {
