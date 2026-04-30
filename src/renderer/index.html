@@ -78,18 +78,22 @@
             <span id="updateText">Aggiornamenti non controllati.</span>
           </div>
           <div class="pager">
-            <div class="viewSwitch" aria-label="Scelta vista prodotti">
-              <button id="inlineListViewButton" class="active" type="button">Elenco</button>
-              <button id="inlineGridViewButton" type="button">Griglia</button>
+            <div class="pagerTop">
+              <div class="viewSwitch" aria-label="Scelta vista prodotti">
+                <button id="inlineListViewButton" class="active" type="button">Elenco</button>
+                <button id="inlineGridViewButton" type="button">Griglia</button>
+              </div>
+              <button id="updateButton" class="secondary" type="button">Aggiornamenti</button>
+              <span id="pageText">Pagina 1</span>
             </div>
-            <button id="updateButton" class="secondary" type="button">Aggiornamenti</button>
-            <button id="firstButton" class="secondary compactPager" type="button" title="Vai alla prima pagina">&lt;&lt;</button>
-            <button id="prev5Button" class="secondary compactPager" type="button" title="Indietro di 5 pagine">-5</button>
-            <button id="prevButton" class="secondary" type="button">Indietro</button>
-            <span id="pageText">Pagina 1</span>
-            <button id="nextButton" class="secondary" type="button">Avanti</button>
-            <button id="next5Button" class="secondary compactPager" type="button" title="Avanti di 5 pagine">+5</button>
-            <button id="lastButton" class="secondary compactPager" type="button" title="Vai all'ultima pagina">&gt;&gt;</button>
+            <div class="pagerControls">
+              <button id="firstButton" class="secondary compactPager" type="button" title="Vai alla prima pagina">&lt;&lt;</button>
+              <button id="prev5Button" class="secondary compactPager" type="button" title="Indietro di 5 pagine">-5</button>
+              <button id="prevButton" class="secondary" type="button">Indietro</button>
+              <button id="nextButton" class="secondary" type="button">Avanti</button>
+              <button id="next5Button" class="secondary compactPager" type="button" title="Avanti di 5 pagine">+5</button>
+              <button id="lastButton" class="secondary compactPager" type="button" title="Vai all'ultima pagina">&gt;&gt;</button>
+            </div>
           </div>
         </section>
 

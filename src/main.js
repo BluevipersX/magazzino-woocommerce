@@ -220,7 +220,7 @@ function setupAutoUpdates() {
   });
 
   autoUpdater.on("error", (error) => {
-    sendUpdateState(`Aggiornamenti non disponibili: ${error.message}`);
+    sendUpdateState(`Update non disponibile: ${error.message}`);
     if (startupUpdateInProgress) {
       setTimeout(openMainAfterStartupCheck, 1200);
     }
@@ -261,7 +261,7 @@ async function getHighestPublishedRelease() {
   });
 
   if (!response.ok) {
-    throw new Error(`GitHub release ${response.status}`);
+    throw new Error(response.status === 403 ? "GitHub temporaneamente non disponibile" : `GitHub release ${response.status}`);
   }
 
   const releases = await response.json();
@@ -336,7 +336,7 @@ async function checkForUpdatesBeforeStartup() {
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   checkForUpdatesBeforeStartup().catch((error) => {
-    sendUpdateState(`Aggiornamenti non disponibili: ${error.message}`);
+    sendUpdateState(`Update non disponibile: ${error.message}`);
     setTimeout(openMainAfterStartupCheck, 1200);
   });
 });
@@ -967,7 +967,7 @@ async function refreshModifiedProducts(cache) {
           cached: cache.processedProducts || cache.total || cache.rows.length,
           total: cache.total || cache.rows.length,
           rows: cache.rows.length,
-          message: "Cache gia aggiornata."
+          message: "Cache ok."
         });
         addDiagnostic("cache", "Controllo modifiche completato: nessuna modifica.");
       }

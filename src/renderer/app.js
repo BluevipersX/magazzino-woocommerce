@@ -123,7 +123,9 @@ function closeSettings() {
 }
 
 function setUpdateStatus(message) {
-  els.updateText.textContent = message;
+  els.updateText.textContent = String(message || "")
+    .replace("Aggiornamenti non disponibili:", "Update:")
+    .replace("GitHub release 403", "GitHub temporaneamente non disponibile");
 }
 
 function formatBytes(value) {
@@ -198,7 +200,7 @@ function renderRows() {
           </div>
         </td>
         <td>
-          <div class="productName">${escapeHtml(row.name)}</div>
+          <div class="productName tableProductName">${escapeHtml(row.name)}</div>
           <div class="subtle">ID ${row.id}${row.parentId ? `, padre ${row.parentId}` : ""}</div>
         </td>
         <td>${escapeHtml(row.sku || "-")}</td>
@@ -225,7 +227,7 @@ function renderRows() {
           }
         </div>
         <div class="cardBody">
-          <div class="productName">${escapeHtml(row.name)}</div>
+          <div class="productName cardProductName">${escapeHtml(row.name)}</div>
           <div class="subtle">SKU ${escapeHtml(row.sku || "-")} · ID ${row.id}</div>
           <div class="cardFields">
             <label>Prezzo<input class="cellInput" data-index="${index}" data-field="regularPrice" value="${escapeAttr(moneyValue(row.regularPrice))}" inputmode="decimal" ${disabledAttr} /></label>
@@ -318,7 +320,7 @@ async function loadProducts(page = state.page) {
     state.rows = result.rows;
     state.page = result.page;
     state.totalPages = result.totalPages;
-    setStatus(`${result.total} prodotti trovati, ${result.rows.length} prodotti caricati in questa pagina. I prodotti variabili vengono mostrati come varianti.`);
+    setStatus(`${result.rows.length} prodotti caricati. Totale: ${result.total}.`);
   } catch (error) {
     if (requestId !== state.requestId) return;
     state.rows = [];
@@ -499,7 +501,7 @@ els.updateButton.addEventListener("click", async () => {
     setUpdateStatus("Controllo aggiornamenti...");
     await window.magazzino.checkForUpdates();
   } catch (error) {
-    setUpdateStatus(error.message || "Aggiornamenti non disponibili.");
+    setUpdateStatus(error.message || "Update non disponibile.");
   }
 });
 els.menuUpdateButton.addEventListener("click", () => els.updateButton.click());
