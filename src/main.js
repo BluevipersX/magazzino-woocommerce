@@ -4,6 +4,8 @@ const path = require("path");
 const fs = require("fs/promises");
 
 let mainWindow;
+let startupWindow;
+let startupUpdateInProgress = false;
 let updateState = "Aggiornamenti non controllati.";
 const windowIcon = path.join(__dirname, "..", "build", "icon.png");
 
@@ -27,15 +29,90 @@ const createWindow = () => {
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
   mainWindow.on("maximize", () => mainWindow.webContents.send("window:maximized", true));
   mainWindow.on("unmaximize", () => mainWindow.webContents.send("window:maximized", false));
-  mainWindow.webContents.once("did-finish-load", () => {
-    setTimeout(() => {
-      checkForUpdates().catch((error) => sendUpdateState(`Aggiornamenti non disponibili: ${error.message}`));
-    }, 2000);
+};
+
+const createStartupWindow = () => {
+  const iconUrl = `file:///${windowIcon.replace(/\\/g, "/")}`;
+  startupWindow = new BrowserWindow({
+    width: 460,
+    height: 240,
+    resizable: false,
+    frame: false,
+    show: true,
+    title: "Controllo aggiornamenti",
+    icon: windowIcon,
+    backgroundColor: "#0d0d0d",
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false
+    }
   });
+
+  startupWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            width: 100vw;
+            height: 100vh;
+            display: grid;
+            place-items: center;
+            background: #0d0d0d;
+            color: #f5f0e9;
+            font-family: "Segoe UI", Arial, sans-serif;
+            user-select: none;
+          }
+          main {
+            width: 100%;
+            padding: 28px;
+            display: grid;
+            gap: 14px;
+            text-align: center;
+          }
+          img { width: 64px; height: 64px; margin: 0 auto; object-fit: contain; }
+          h1 { margin: 0; color: #a6772f; font-size: 20px; }
+          p { margin: 0; color: #d9cbc2; font-size: 13px; }
+          .bar {
+            width: 100%;
+            height: 8px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: #2a2a2a;
+          }
+          .bar span {
+            width: 42%;
+            height: 100%;
+            display: block;
+            border-radius: inherit;
+            background: #a6772f;
+            animation: pulse 1.2s ease-in-out infinite alternate;
+          }
+          @keyframes pulse { from { transform: translateX(-20%); } to { transform: translateX(150%); } }
+        </style>
+      </head>
+      <body>
+        <main>
+          <img src="${iconUrl}" alt="">
+          <h1>Controllo aggiornamenti</h1>
+          <p id="message">Preparazione avvio...</p>
+          <div class="bar"><span></span></div>
+        </main>
+      </body>
+    </html>
+  `)}`);
 };
 
 function sendUpdateState(message) {
   updateState = message;
+  if (startupWindow && !startupWindow.isDestroyed()) {
+    startupWindow.webContents.executeJavaScript(
+      `document.getElementById("message").textContent = ${JSON.stringify(message)};`
+    ).catch(() => {});
+  }
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("updates:state", message);
   }
@@ -55,6 +132,7 @@ function setupAutoUpdates() {
 
   autoUpdater.on("update-not-available", () => {
     sendUpdateState("App aggiornata.");
+    if (startupUpdateInProgress) openMainAfterStartupCheck();
   });
 
   autoUpdater.on("download-progress", (progress) => {
@@ -63,6 +141,10 @@ function setupAutoUpdates() {
 
   autoUpdater.on("update-downloaded", async (info) => {
     sendUpdateState(`Aggiornamento ${info.version} pronto.`);
+    if (startupUpdateInProgress) {
+      autoUpdater.quitAndInstall(false, true);
+      return;
+    }
     const result = await dialog.showMessageBox(mainWindow, {
       type: "info",
       buttons: ["Riavvia e installa", "Dopo"],
@@ -80,6 +162,9 @@ function setupAutoUpdates() {
 
   autoUpdater.on("error", (error) => {
     sendUpdateState(`Aggiornamenti non disponibili: ${error.message}`);
+    if (startupUpdateInProgress) {
+      setTimeout(openMainAfterStartupCheck, 1200);
+    }
   });
 }
 
@@ -94,13 +179,38 @@ async function checkForUpdates() {
   return true;
 }
 
+function openMainAfterStartupCheck() {
+  startupUpdateInProgress = false;
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+  if (startupWindow && !startupWindow.isDestroyed()) startupWindow.close();
+  startupWindow = null;
+}
+
+async function checkForUpdatesBeforeStartup() {
+  createStartupWindow();
+  setupAutoUpdates();
+
+  if (!app.isPackaged) {
+    sendUpdateState("Aggiornamenti attivi nella versione installata.");
+    setTimeout(openMainAfterStartupCheck, 800);
+    return;
+  }
+
+  startupUpdateInProgress = true;
+  sendUpdateState("Controllo aggiornamenti prima dell'avvio...");
+  await autoUpdater.checkForUpdates();
+}
+
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
-  createWindow();
-  setupAutoUpdates();
+  checkForUpdatesBeforeStartup().catch((error) => {
+    sendUpdateState(`Aggiornamenti non disponibili: ${error.message}`);
+    setTimeout(openMainAfterStartupCheck, 1200);
+  });
 });
 
 app.on("window-all-closed", () => {
+  if (startupWindow && !startupWindow.isDestroyed()) return;
   if (process.platform !== "darwin") app.quit();
 });
 
