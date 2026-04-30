@@ -5,6 +5,7 @@ App Windows semplice per modificare da WooCommerce:
 - prezzo normale
 - prezzo scontato
 - quantita di magazzino
+- ricerca prodotti live mentre scrivi
 
 ## Avvio
 
@@ -46,7 +47,7 @@ Il programma verra generato in `release`.
 
 L'installer principale avra un nome simile a:
 
-`Magazzino-WooCommerce-Setup-0.1.1.exe`
+`Magazzino-WooCommerce-Setup-0.1.2.exe`
 
 L'utente dovra solo aprire quell'eseguibile e seguire l'installazione.
 

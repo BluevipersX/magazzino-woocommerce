@@ -5,14 +5,16 @@ const fs = require("fs/promises");
 
 let mainWindow;
 let updateState = "Aggiornamenti non controllati.";
+const windowIcon = path.join(__dirname, "..", "build", "icon.png");
 
 const createWindow = () => {
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 820,
-    minWidth: 980,
-    minHeight: 640,
+    width: 1360,
+    height: 860,
+    minWidth: 1180,
+    minHeight: 720,
     title: "Magazzino WooCommerce",
+    icon: windowIcon,
     backgroundColor: "#f4f7f5",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),

@@ -17,20 +17,21 @@
 
 body {
   margin: 0;
-  min-height: 100vh;
+  height: 100vh;
   display: grid;
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: 260px minmax(0, 1fr);
+  overflow: hidden;
   background: var(--page);
   color: var(--ink);
   font-family: "Segoe UI", Arial, sans-serif;
 }
 
 .sidebar {
-  min-height: 100vh;
-  padding: 28px;
+  min-height: 0;
+  padding: 22px;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 18px;
   background: #10251f;
   color: #f7fbf9;
 }
@@ -52,11 +53,11 @@ h3 {
 }
 
 h1 {
-  font-size: 34px;
+  font-size: 30px;
 }
 
 h2 {
-  font-size: 28px;
+  font-size: 24px;
 }
 
 h3 {
@@ -151,7 +152,11 @@ button.secondary:hover {
 
 main {
   min-width: 0;
-  padding: 26px;
+  min-height: 0;
+  padding: 20px;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 12px;
 }
 
 .toolbar,
@@ -164,12 +169,13 @@ main {
 
 .filters {
   display: grid;
-  grid-template-columns: minmax(220px, 360px) 150px 110px;
+  grid-template-columns: minmax(220px, 1fr) 142px 104px;
   gap: 10px;
+  width: min(620px, 100%);
 }
 
 .statusbar {
-  min-height: 52px;
+  min-height: 44px;
   color: var(--muted);
 }
 
@@ -188,10 +194,13 @@ main {
   align-items: center;
   gap: 10px;
   white-space: nowrap;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .tableShell {
   overflow: auto;
+  min-height: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
@@ -199,16 +208,18 @@ main {
 
 table {
   width: 100%;
-  min-width: 980px;
+  min-width: 860px;
   border-collapse: collapse;
+  table-layout: fixed;
 }
 
 th,
 td {
-  padding: 12px 10px;
+  padding: 9px 8px;
   border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: middle;
+  overflow: hidden;
 }
 
 th {
@@ -223,7 +234,44 @@ th {
 }
 
 td {
-  font-size: 14px;
+  font-size: 13px;
+}
+
+th:nth-child(1),
+td:nth-child(1) {
+  width: 34%;
+}
+
+th:nth-child(2),
+td:nth-child(2) {
+  width: 11%;
+}
+
+th:nth-child(3),
+td:nth-child(3) {
+  width: 9%;
+}
+
+th:nth-child(4),
+td:nth-child(4),
+th:nth-child(5),
+td:nth-child(5) {
+  width: 10%;
+}
+
+th:nth-child(6),
+td:nth-child(6) {
+  width: 9%;
+}
+
+th:nth-child(7),
+td:nth-child(7) {
+  width: 10%;
+}
+
+th:nth-child(8),
+td:nth-child(8) {
+  width: 7%;
 }
 
 tr.dirty {
@@ -231,8 +279,11 @@ tr.dirty {
 }
 
 .productName {
-  max-width: 420px;
+  max-width: 100%;
   font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .subtle {
@@ -241,11 +292,13 @@ tr.dirty {
 }
 
 .cellInput {
-  width: 105px;
+  width: 100%;
+  min-width: 74px;
 }
 
 .qtyInput {
-  width: 90px;
+  width: 100%;
+  min-width: 68px;
 }
 
 .badge {

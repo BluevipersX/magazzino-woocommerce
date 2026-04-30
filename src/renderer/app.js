@@ -2,7 +2,9 @@ const state = {
   rows: [],
   page: 1,
   totalPages: 1,
-  loading: false
+  loading: false,
+  requestId: 0,
+  searchTimer: null
 };
 
 const els = {
@@ -56,11 +58,8 @@ function setUpdateStatus(message) {
 
 function setLoading(loading) {
   state.loading = loading;
-  document.querySelectorAll("button, input, select").forEach((el) => {
-    if (el.id !== "consumerKey" && el.id !== "consumerSecret" && el.id !== "storeUrl") {
-      el.disabled = loading;
-    }
-  });
+  els.refreshButton.disabled = loading;
+  renderRows();
 }
 
 function moneyValue(value) {
@@ -142,6 +141,7 @@ async function saveConfig() {
 }
 
 async function loadProducts(page = state.page) {
+  const requestId = ++state.requestId;
   setLoading(true);
   setStatus("Caricamento prodotti...");
   try {
@@ -150,17 +150,28 @@ async function loadProducts(page = state.page) {
       search: els.searchInput.value,
       stockStatus: els.stockFilter.value
     });
+    if (requestId !== state.requestId) return;
     state.rows = result.rows;
     state.page = result.page;
     state.totalPages = result.totalPages;
     setStatus(`${result.rows.length} righe caricate. I prodotti variabili vengono mostrati come varianti.`);
   } catch (error) {
+    if (requestId !== state.requestId) return;
     state.rows = [];
     setStatus(error.message || "Errore durante il caricamento.", "error");
   } finally {
-    setLoading(false);
-    renderRows();
+    if (requestId === state.requestId) {
+      setLoading(false);
+      renderRows();
+    }
   }
+}
+
+function scheduleLiveSearch() {
+  clearTimeout(state.searchTimer);
+  state.searchTimer = setTimeout(() => {
+    if (hasConfig()) loadProducts(1);
+  }, 450);
 }
 
 async function saveRow(tr) {
@@ -242,6 +253,7 @@ els.updateButton.addEventListener("click", async () => {
 els.prevButton.addEventListener("click", () => loadProducts(state.page - 1));
 els.nextButton.addEventListener("click", () => loadProducts(state.page + 1));
 els.stockFilter.addEventListener("change", () => loadProducts(1));
+els.searchInput.addEventListener("input", scheduleLiveSearch);
 els.searchInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") loadProducts(1);
 });

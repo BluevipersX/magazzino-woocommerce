@@ -1,6 +1,6 @@
 {
   "name": "magazzino-woocommerce",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "App Windows semplice per gestire prezzi e quantita prodotti WooCommerce.",
   "author": "BluevipersX",
   "main": "src/main.js",
@@ -23,9 +23,11 @@
     },
     "files": [
       "src/**/*",
+      "build/icon.png",
       "package.json"
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",
