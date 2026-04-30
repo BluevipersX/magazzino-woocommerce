@@ -385,6 +385,11 @@ main {
   white-space: nowrap;
 }
 
+.compactPager {
+  min-width: 42px;
+  padding: 0 10px;
+}
+
 .viewSwitch {
   display: inline-flex;
   height: 34px;

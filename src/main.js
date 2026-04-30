@@ -16,6 +16,7 @@ let productCacheStatus = {
   complete: false,
   cached: 0,
   total: 0,
+  rows: 0,
   downloadedBytes: 0,
   estimatedTotalBytes: 0,
   bytesPerSecond: 0,
@@ -415,9 +416,9 @@ function formatEta(seconds) {
   return `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
-function cacheProgressText(cached, total, downloadedBytes = productCacheStats.downloadedBytes) {
-  const estimatedTotalBytes = cached > 0 && total > 0
-    ? Math.max(downloadedBytes, Math.round((downloadedBytes / cached) * total))
+function cacheProgressText(processedProducts, totalProducts, downloadedBytes = productCacheStats.downloadedBytes) {
+  const estimatedTotalBytes = processedProducts > 0 && totalProducts > 0
+    ? Math.max(downloadedBytes, Math.round((downloadedBytes / processedProducts) * totalProducts))
     : downloadedBytes;
   const elapsedSeconds = Math.max((Date.now() - productCacheStats.startedAt) / 1000, 1);
   const bytesPerSecond = downloadedBytes / elapsedSeconds;
@@ -696,6 +697,7 @@ async function fetchProductRowsPage(page) {
   return {
     rows,
     bytes,
+    processedProducts: (result.data || []).length,
     total: result.total,
     totalPages: result.totalPages
   };
@@ -718,88 +720,100 @@ async function syncProductCache() {
   productCachePromise = (async () => {
     const config = await readConfig();
     ensureConfig(config);
-    const cache = {
+    const existingCache = await readProductCache();
+    const canResume = existingCache.storeUrl === config.storeUrl
+      && !existingCache.complete
+      && existingCache.processedProducts > 0
+      && existingCache.total > 0
+      && Array.isArray(existingCache.rows);
+    const cache = canResume ? existingCache : {
       storeUrl: config.storeUrl,
       complete: false,
       total: 0,
+      processedProducts: 0,
       rows: [],
       updatedAt: new Date().toISOString()
     };
     productCacheStats = {
       startedAt: Date.now(),
-      downloadedBytes: 0
+      downloadedBytes: canResume ? Number(existingCache.downloadedBytes || 0) : 0
     };
 
-    sendCacheStatus({ syncing: true, complete: false, cached: 0, total: 0, message: "Genero cache prodotti..." });
+    sendCacheStatus({
+      syncing: true,
+      complete: false,
+      cached: cache.processedProducts || 0,
+      total: cache.total || 0,
+      rows: cache.rows.length,
+      message: canResume ? "Riprendo generazione cache prodotti..." : "Genero cache prodotti..."
+    });
 
     try {
-      const firstPage = await fetchProductRowsPage(1);
-      productCacheStats.downloadedBytes += firstPage.bytes || 0;
-      cache.total = firstPage.total;
-      cache.rows = firstPage.rows;
-      cache.updatedAt = new Date().toISOString();
-      await writeProductCache(cache);
-      const firstProgress = cacheProgressText(cache.rows.length, cache.total);
-      sendCacheStatus({
-        syncing: true,
-        complete: false,
-        cached: cache.rows.length,
-        total: cache.total,
-        downloadedBytes: firstProgress.downloadedBytes,
-        estimatedTotalBytes: firstProgress.estimatedTotalBytes,
-        bytesPerSecond: firstProgress.bytesPerSecond,
-        etaSeconds: firstProgress.etaSeconds,
-        message: `Cache iniziale pronta: ${cache.rows.length}/${cache.total} prodotti - ${firstProgress.text}. Continuo in background...`
-      });
+      let totalPages = Math.max(Math.ceil((cache.total || 0) / 100), 1);
+      let startPage = canResume ? Math.floor((cache.processedProducts || 0) / 100) + 1 : 1;
 
-      for (let page = 2; page <= firstPage.totalPages; page += 1) {
+      for (let page = startPage; page <= totalPages; page += 1) {
         const nextPage = await fetchProductRowsPage(page);
         productCacheStats.downloadedBytes += nextPage.bytes || 0;
+        if (!cache.total) cache.total = nextPage.total;
+        totalPages = nextPage.totalPages || totalPages;
         cache.rows.push(...nextPage.rows);
+        cache.processedProducts = Math.min((cache.processedProducts || 0) + nextPage.processedProducts, cache.total || 0);
+        cache.downloadedBytes = productCacheStats.downloadedBytes;
         cache.updatedAt = new Date().toISOString();
-        await writeProductCache(cache);
-        const progress = cacheProgressText(cache.rows.length, cache.total);
+        if (page === 1 || page % 5 === 0 || page === totalPages) {
+          await writeProductCache(cache);
+        }
+        const progress = cacheProgressText(cache.processedProducts, cache.total);
+        const initialText = page === 1 && !canResume ? "Cache iniziale pronta" : "Genero cache";
         sendCacheStatus({
           syncing: true,
           complete: false,
-          cached: cache.rows.length,
+          cached: cache.processedProducts,
           total: cache.total,
+          rows: cache.rows.length,
           downloadedBytes: progress.downloadedBytes,
           estimatedTotalBytes: progress.estimatedTotalBytes,
           bytesPerSecond: progress.bytesPerSecond,
           etaSeconds: progress.etaSeconds,
-          message: `Genero cache: ${cache.rows.length}/${cache.total} prodotti - ${progress.text}`
+          message: `${initialText}: ${cache.processedProducts}/${cache.total} prodotti base - ${cache.rows.length} righe cache - ${progress.text}`
         });
       }
 
       cache.complete = true;
       cache.updatedAt = new Date().toISOString();
       await writeProductCache(cache);
-      const finalProgress = cacheProgressText(cache.rows.length, cache.total);
+      const finalProgress = cacheProgressText(cache.processedProducts, cache.total);
       sendCacheStatus({
         syncing: false,
         complete: true,
-        cached: cache.rows.length,
+        cached: cache.processedProducts,
         total: cache.total,
+        rows: cache.rows.length,
         downloadedBytes: finalProgress.downloadedBytes,
         estimatedTotalBytes: finalProgress.downloadedBytes,
         bytesPerSecond: finalProgress.bytesPerSecond,
         etaSeconds: 0,
-        message: `Cache completa: ${cache.rows.length} prodotti - ${formatBytes(finalProgress.downloadedBytes)} scaricati.`
+        message: `Cache completa: ${cache.total} prodotti base, ${cache.rows.length} righe cache - ${formatBytes(finalProgress.downloadedBytes)} scaricati.`
       });
     } catch (error) {
-      const cachedCount = cache.rows.length;
+      const cachedCount = cache.processedProducts || 0;
       const errorProgress = cacheProgressText(cachedCount, cache.total);
+      if (cache.rows.length) {
+        cache.updatedAt = new Date().toISOString();
+        await writeProductCache(cache);
+      }
       sendCacheStatus({
         syncing: false,
         cached: cachedCount,
         total: cache.total,
+        rows: cache.rows.length,
         downloadedBytes: errorProgress.downloadedBytes,
         estimatedTotalBytes: errorProgress.estimatedTotalBytes,
         bytesPerSecond: errorProgress.bytesPerSecond,
         etaSeconds: errorProgress.etaSeconds,
         message: cachedCount
-          ? `Cache parziale salvata (${cachedCount}/${cache.total} prodotti - ${errorProgress.text}). Riprovero al prossimo avvio: ${error.message}`
+          ? `Cache parziale salvata (${cachedCount}/${cache.total} prodotti base, ${cache.rows.length} righe cache - ${errorProgress.text}). Riprovero al prossimo avvio: ${error.message}`
           : `Cache non aggiornata: ${error.message}`
       });
     } finally {
@@ -829,9 +843,12 @@ async function ensureProductCache() {
   sendCacheStatus({
     syncing: Boolean(productCachePromise),
     complete: Boolean(cache.complete),
-    cached: cache.rows.length,
+    cached: cache.processedProducts || cache.total || cache.rows.length,
     total: cache.total || cache.rows.length,
-    message: cache.complete ? `Cache pronta: ${cache.rows.length} prodotti.` : `Cache parziale: ${cache.rows.length} prodotti.`
+    rows: cache.rows.length,
+    message: cache.complete
+      ? `Cache pronta: ${cache.total || cache.rows.length} prodotti base, ${cache.rows.length} righe cache.`
+      : `Cache parziale: ${cache.processedProducts || 0}/${cache.total || 0} prodotti base, ${cache.rows.length} righe cache.`
   });
 
   if (!cache.complete && !productCachePromise) {
@@ -905,24 +922,27 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
       storeUrl: config.storeUrl,
       complete: firstPage.totalPages <= 1,
       total: firstPage.total,
+      processedProducts: Math.min(firstPage.processedProducts, firstPage.total || firstPage.processedProducts),
       rows: firstPage.rows,
+      downloadedBytes: productCacheStats.downloadedBytes,
       updatedAt: new Date().toISOString()
     };
     await writeProductCache(firstCache);
     rows = firstCache.rows;
-    const firstProgress = cacheProgressText(rows.length, firstCache.total);
+    const firstProgress = cacheProgressText(firstCache.processedProducts, firstCache.total);
     sendCacheStatus({
       syncing: !firstCache.complete,
       complete: firstCache.complete,
-      cached: rows.length,
+      cached: firstCache.processedProducts,
       total: firstCache.total,
+      rows: rows.length,
       downloadedBytes: firstProgress.downloadedBytes,
       estimatedTotalBytes: firstCache.complete ? firstProgress.downloadedBytes : firstProgress.estimatedTotalBytes,
       bytesPerSecond: firstProgress.bytesPerSecond,
       etaSeconds: firstCache.complete ? 0 : firstProgress.etaSeconds,
       message: firstCache.complete
-        ? `Cache completa: ${rows.length} prodotti - ${formatBytes(firstProgress.downloadedBytes)} scaricati.`
-        : `Cache iniziale pronta: ${rows.length}/${firstCache.total} prodotti - ${firstProgress.text}`
+        ? `Cache completa: ${firstCache.total} prodotti base, ${rows.length} righe cache - ${formatBytes(firstProgress.downloadedBytes)} scaricati.`
+        : `Cache iniziale pronta: ${firstCache.processedProducts}/${firstCache.total} prodotti base - ${rows.length} righe cache - ${firstProgress.text}`
     });
     if (!firstCache.complete) syncProductCache();
   }

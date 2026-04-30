@@ -38,8 +38,12 @@ const els = {
   refreshButton: document.querySelector("#refreshButton"),
   updateButton: document.querySelector("#updateButton"),
   updateText: document.querySelector("#updateText"),
+  firstButton: document.querySelector("#firstButton"),
+  prev5Button: document.querySelector("#prev5Button"),
   prevButton: document.querySelector("#prevButton"),
   nextButton: document.querySelector("#nextButton"),
+  next5Button: document.querySelector("#next5Button"),
+  lastButton: document.querySelector("#lastButton"),
   pageText: document.querySelector("#pageText"),
   statusText: document.querySelector("#statusText"),
   cacheText: document.querySelector("#cacheText"),
@@ -130,8 +134,12 @@ function stockLabel(stockStatus) {
 
 function renderRows() {
   els.pageText.textContent = `Pagina ${state.page} di ${Math.max(state.totalPages, 1)}`;
+  els.firstButton.disabled = state.loading || state.page <= 1;
+  els.prev5Button.disabled = state.loading || state.page <= 1;
   els.prevButton.disabled = state.loading || state.page <= 1;
   els.nextButton.disabled = state.loading || state.page >= state.totalPages;
+  els.next5Button.disabled = state.loading || state.page >= state.totalPages;
+  els.lastButton.disabled = state.loading || state.page >= state.totalPages;
   const editingLocked = state.loading || state.cacheSyncing;
   const disabledAttr = editingLocked ? "disabled" : "";
 
@@ -295,6 +303,11 @@ function scheduleLiveSearch() {
   }, 250);
 }
 
+function goToPage(page) {
+  const nextPage = Math.min(Math.max(Number(page) || 1, 1), Math.max(state.totalPages, 1));
+  if (!state.loading && nextPage !== state.page) loadProducts(nextPage);
+}
+
 async function saveRow(tr) {
   if (state.cacheSyncing) {
     setStatus("Cache prodotti in generazione. Attendi il completamento prima di modificare.", "error");
@@ -427,8 +440,12 @@ els.maximizeButton.addEventListener("click", async () => {
   els.maximizeButton.textContent = maximized ? "[_]" : "[ ]";
 });
 els.closeButton.addEventListener("click", () => window.magazzino.closeWindow());
+els.firstButton.addEventListener("click", () => goToPage(1));
+els.prev5Button.addEventListener("click", () => goToPage(state.page - 5));
 els.prevButton.addEventListener("click", () => loadProducts(state.page - 1));
 els.nextButton.addEventListener("click", () => loadProducts(state.page + 1));
+els.next5Button.addEventListener("click", () => goToPage(state.page + 5));
+els.lastButton.addEventListener("click", () => goToPage(state.totalPages));
 els.stockFilter.addEventListener("change", () => loadProducts(1));
 els.setFilter.addEventListener("change", () => loadProducts(1));
 els.languageFilter.addEventListener("change", () => loadProducts(1));
