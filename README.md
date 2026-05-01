@@ -47,7 +47,7 @@ Il programma verra generato in `release`.
 
 L'installer principale avra un nome simile a:
 
-`Magazzino-WooCommerce-Setup-0.1.27.exe`
+`Magazzino-WooCommerce-Setup-0.1.28.exe`
 
 L'utente dovra solo aprire quell'eseguibile e seguire l'installazione.
 
@@ -89,3 +89,9 @@ npm.cmd run release
 ```
 
 In quel caso serve un token GitHub disponibile nella variabile ambiente `GH_TOKEN`.
+
+## Avvisi firewall, antivirus e SmartScreen
+
+L'installer non richiede privilegi amministratore: viene installato per il singolo utente e l'app viene avviata con i permessi dell'utente corrente.
+
+Windows Defender SmartScreen e alcuni antivirus possono bloccare o segnalare l'app se l'eseguibile non e firmato con un certificato di firma codice riconosciuto. Per ridurre questi avvisi in modo definitivo serve acquistare un certificato Code Signing, preferibilmente EV, e configurare le variabili di firma supportate da `electron-builder` durante la release.
