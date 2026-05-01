@@ -827,6 +827,50 @@ tr.dirty td:first-child {
   width: min(820px, 100%);
 }
 
+.helpDialog {
+  width: min(460px, 100%);
+}
+
+.helpHeader {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.helpHeader img {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+}
+
+.versionBadge {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 8px;
+  padding: 5px 8px;
+  border: 1px solid rgba(166, 119, 47, 0.45);
+  border-radius: var(--radius-sm);
+  color: var(--color-primary-soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.helpPhrase {
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-primary) 7%, var(--color-surface));
+  color: var(--color-text);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.singleAction {
+  grid-template-columns: 1fr;
+}
+
 #diagnosticsText {
   width: 100%;
   height: min(460px, 55vh);

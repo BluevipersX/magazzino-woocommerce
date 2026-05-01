@@ -1034,6 +1034,7 @@ ipcMain.handle("window:close", () => mainWindow.close());
 ipcMain.handle("window:is-maximized", () => mainWindow.isMaximized());
 ipcMain.handle("app:quit", () => app.quit());
 ipcMain.handle("app:open-repository", () => shell.openExternal("https://github.com/BluevipersX/magazzino-woocommerce"));
+ipcMain.handle("app:version", () => app.getVersion());
 ipcMain.handle("app:show-help", () => dialog.showMessageBox(mainWindow, {
   type: "info",
   title: "Aiuto",

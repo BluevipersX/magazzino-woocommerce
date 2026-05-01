@@ -24,6 +24,9 @@ const els = {
   inlineListViewButton: document.querySelector("#inlineListViewButton"),
   inlineGridViewButton: document.querySelector("#inlineGridViewButton"),
   helpButton: document.querySelector("#helpButton"),
+  helpModal: document.querySelector("#helpModal"),
+  helpVersion: document.querySelector("#helpVersion"),
+  closeHelpButton: document.querySelector("#closeHelpButton"),
   themeToggleButton: document.querySelector("#themeToggleButton"),
   configForm: document.querySelector("#configForm"),
   configModal: document.querySelector("#configModal"),
@@ -159,6 +162,22 @@ async function openDiagnostics() {
 function closeDiagnostics() {
   els.diagnosticsModal.classList.remove("open");
   els.diagnosticsModal.setAttribute("aria-hidden", "true");
+}
+
+async function openHelp() {
+  try {
+    const version = await window.magazzino.getAppVersion();
+    els.helpVersion.textContent = `Versione ${version}`;
+  } catch {
+    els.helpVersion.textContent = "Versione non disponibile";
+  }
+  els.helpModal.classList.add("open");
+  els.helpModal.setAttribute("aria-hidden", "false");
+}
+
+function closeHelp() {
+  els.helpModal.classList.remove("open");
+  els.helpModal.setAttribute("aria-hidden", "true");
 }
 
 function setLoading(loading) {
@@ -624,6 +643,10 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.key === "Escape" && els.configModal.classList.contains("open")) {
     closeSettings();
+    return;
+  }
+  if (event.key === "Escape" && els.helpModal.classList.contains("open")) {
+    closeHelp();
   }
 });
 
@@ -645,7 +668,11 @@ els.listViewButton.addEventListener("click", () => setProductView("list"));
 els.gridViewButton.addEventListener("click", () => setProductView("grid"));
 els.inlineListViewButton.addEventListener("click", () => setProductView("list"));
 els.inlineGridViewButton.addEventListener("click", () => setProductView("grid"));
-els.helpButton.addEventListener("click", () => window.magazzino.showHelp());
+els.helpButton.addEventListener("click", openHelp);
+els.closeHelpButton.addEventListener("click", closeHelp);
+els.helpModal.addEventListener("click", (event) => {
+  if (event.target === els.helpModal) closeHelp();
+});
 els.menuQuitButton.addEventListener("click", () => window.magazzino.quitApp());
 els.minimizeButton.addEventListener("click", () => window.magazzino.minimizeWindow());
 els.maximizeButton.addEventListener("click", async () => {
