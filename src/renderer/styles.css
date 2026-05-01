@@ -350,6 +350,29 @@ main {
   gap: 4px;
 }
 
+.bulkBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.bulkBar[hidden] {
+  display: none;
+}
+
+.bulkBar strong {
+  color: var(--color-primary-soft);
+  font-size: 12px;
+}
+
+.bulkBar button {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 #statusText[data-tone="error"] {
   color: var(--color-error);
 }
@@ -535,6 +558,10 @@ td:nth-child(9) {
 
 tr.dirty {
   background: rgba(166, 119, 47, 0.14);
+}
+
+tr.dirty td:first-child {
+  box-shadow: inset 3px 0 0 var(--color-primary);
 }
 
 .productName {

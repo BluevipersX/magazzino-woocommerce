@@ -4,8 +4,10 @@ const state = {
   totalPages: 1,
   loading: false,
   cacheSyncing: false,
+  savingBulk: false,
   requestId: 0,
   searchTimer: null,
+  dirtyRows: new Map(),
   theme: localStorage.getItem("theme") || "light"
 };
 
@@ -54,6 +56,10 @@ const els = {
   next5Button: document.querySelector("#next5Button"),
   lastButton: document.querySelector("#lastButton"),
   pageText: document.querySelector("#pageText"),
+  bulkBar: document.querySelector("#bulkBar"),
+  bulkCount: document.querySelector("#bulkCount"),
+  saveAllButton: document.querySelector("#saveAllButton"),
+  discardAllButton: document.querySelector("#discardAllButton"),
   statusText: document.querySelector("#statusText"),
   cacheText: document.querySelector("#cacheText"),
   cacheOverlay: document.querySelector("#cacheOverlay"),
@@ -158,6 +164,7 @@ function closeDiagnostics() {
 function setLoading(loading) {
   state.loading = loading;
   els.refreshButton.disabled = loading;
+  updateBulkControls();
   renderRows();
 }
 
@@ -171,16 +178,73 @@ function stockLabel(stockStatus) {
   return "Disponibile";
 }
 
+function rowKey(row) {
+  return `${row.parentId || 0}:${row.id}`;
+}
+
+function editableRow(row) {
+  const dirty = state.dirtyRows.get(rowKey(row));
+  return dirty ? { ...row, ...dirty } : row;
+}
+
+function editableSnapshot(row) {
+  return {
+    regularPrice: moneyValue(row.regularPrice).trim(),
+    salePrice: moneyValue(row.salePrice).trim(),
+    stockQuantity: moneyValue(row.stockQuantity).trim()
+  };
+}
+
+function rowHasChanges(row, values) {
+  const original = editableSnapshot(row);
+  return original.regularPrice !== values.regularPrice
+    || original.salePrice !== values.salePrice
+    || original.stockQuantity !== values.stockQuantity;
+}
+
+function updateBulkControls() {
+  const count = state.dirtyRows.size;
+  els.bulkBar.hidden = count === 0;
+  els.bulkCount.textContent = count === 1 ? "1 modifica da salvare" : `${count} modifiche da salvare`;
+  els.saveAllButton.disabled = state.loading || state.cacheSyncing || state.savingBulk || count === 0;
+  els.discardAllButton.disabled = state.loading || state.savingBulk || count === 0;
+}
+
+function setDirtyRow(index, values) {
+  const row = state.rows[index];
+  if (!row) return;
+  const key = rowKey(row);
+  if (rowHasChanges(row, values)) {
+    state.dirtyRows.set(key, { ...row, ...values });
+  } else {
+    state.dirtyRows.delete(key);
+  }
+  updateBulkControls();
+}
+
+function changedRows() {
+  return Array.from(state.dirtyRows.values());
+}
+
+function validateRow(row) {
+  const qty = row.stockQuantity;
+  if (qty !== "" && !Number.isInteger(Number(qty))) {
+    return "La quantita deve essere un numero intero.";
+  }
+  return "";
+}
+
 function renderRows() {
   els.pageText.textContent = `Pagina ${state.page} di ${Math.max(state.totalPages, 1)}`;
-  els.firstButton.disabled = state.loading || state.page <= 1;
-  els.prev5Button.disabled = state.loading || state.page <= 1;
-  els.prevButton.disabled = state.loading || state.page <= 1;
-  els.nextButton.disabled = state.loading || state.page >= state.totalPages;
-  els.next5Button.disabled = state.loading || state.page >= state.totalPages;
-  els.lastButton.disabled = state.loading || state.page >= state.totalPages;
-  const editingLocked = state.loading || state.cacheSyncing;
+  els.firstButton.disabled = state.loading || state.savingBulk || state.page <= 1;
+  els.prev5Button.disabled = state.loading || state.savingBulk || state.page <= 1;
+  els.prevButton.disabled = state.loading || state.savingBulk || state.page <= 1;
+  els.nextButton.disabled = state.loading || state.savingBulk || state.page >= state.totalPages;
+  els.next5Button.disabled = state.loading || state.savingBulk || state.page >= state.totalPages;
+  els.lastButton.disabled = state.loading || state.savingBulk || state.page >= state.totalPages;
+  const editingLocked = state.loading || state.cacheSyncing || state.savingBulk;
   const disabledAttr = editingLocked ? "disabled" : "";
+  updateBulkControls();
 
   if (!state.rows.length) {
     els.productBody.innerHTML = `<tr><td colspan="9" class="empty">Nessun prodotto trovato.</td></tr>`;
@@ -190,8 +254,11 @@ function renderRows() {
 
   els.productBody.innerHTML = state.rows
     .map(
-      (row, index) => `
-      <tr data-index="${index}">
+      (baseRow, index) => {
+        const row = editableRow(baseRow);
+        const dirtyClass = state.dirtyRows.has(rowKey(baseRow)) ? "dirty" : "";
+        return `
+      <tr data-index="${index}" class="${dirtyClass}">
         <td>
           <div class="productThumb">
             ${
@@ -213,14 +280,18 @@ function renderRows() {
         <td><span class="badge ${escapeAttr(row.stockStatus)}">${stockLabel(row.stockStatus)}</span></td>
         <td><button type="button" data-action="save" ${disabledAttr}>Salva</button></td>
       </tr>
-    `
+    `;
+      }
     )
     .join("");
 
   els.gridShell.innerHTML = state.rows
     .map(
-      (row, index) => `
-      <article class="productCard ${row.stockStatus}">
+      (baseRow, index) => {
+        const row = editableRow(baseRow);
+        const dirtyClass = state.dirtyRows.has(rowKey(baseRow)) ? " dirty" : "";
+        return `
+      <article class="productCard ${row.stockStatus}${dirtyClass}">
         <div class="cardImage">
           ${
             row.imageUrl
@@ -242,7 +313,8 @@ function renderRows() {
           </div>
         </div>
       </article>
-    `
+    `;
+      }
     )
     .join("");
 }
@@ -353,14 +425,14 @@ async function saveRow(tr) {
     return;
   }
   const index = Number(tr.dataset.index);
-  const row = { ...state.rows[index] };
+  let row = { ...state.rows[index] };
   tr.querySelectorAll("input[data-field]").forEach((input) => {
     row[input.dataset.field] = input.value.trim();
   });
 
-  const qty = row.stockQuantity;
-  if (qty !== "" && !Number.isInteger(Number(qty))) {
-    setStatus("La quantita deve essere un numero intero.", "error");
+  const validationError = validateRow(row);
+  if (validationError) {
+    setStatus(validationError, "error");
     return;
   }
 
@@ -369,9 +441,8 @@ async function saveRow(tr) {
   try {
     await window.magazzino.updateProduct(row);
     state.rows[index] = row;
-    tr.classList.remove("dirty");
+    state.dirtyRows.delete(rowKey(row));
     setStatus("Prodotto aggiornato.", "ok");
-    await loadProducts(state.page);
   } catch (error) {
     setStatus(error.message || "Errore durante il salvataggio.", "error");
   } finally {
@@ -387,14 +458,14 @@ async function saveGridCard(button) {
   }
   const index = Number(button.dataset.index);
   const card = button.closest(".productCard");
-  const row = { ...state.rows[index] };
+  let row = { ...state.rows[index] };
   card.querySelectorAll("input[data-field]").forEach((input) => {
     row[input.dataset.field] = input.value.trim();
   });
 
-  const qty = row.stockQuantity;
-  if (qty !== "" && !Number.isInteger(Number(qty))) {
-    setStatus("La quantita deve essere un numero intero.", "error");
+  const validationError = validateRow(row);
+  if (validationError) {
+    setStatus(validationError, "error");
     return;
   }
 
@@ -403,14 +474,74 @@ async function saveGridCard(button) {
   try {
     await window.magazzino.updateProduct(row);
     state.rows[index] = row;
+    state.dirtyRows.delete(rowKey(row));
     setStatus("Prodotto aggiornato.", "ok");
-    await loadProducts(state.page);
   } catch (error) {
     setStatus(error.message || "Errore durante il salvataggio.", "error");
   } finally {
     setLoading(false);
     renderRows();
   }
+}
+
+async function saveAllChanges() {
+  if (state.cacheSyncing) {
+    setStatus("Cache prodotti in generazione. Attendi il completamento prima di modificare.", "error");
+    return;
+  }
+
+  const rows = changedRows();
+  const invalid = rows.find((row) => validateRow(row));
+  if (invalid) {
+    setStatus(`${invalid.name}: ${validateRow(invalid)}`, "error");
+    return;
+  }
+
+  if (!rows.length) {
+    setStatus("Nessuna modifica da salvare.");
+    return;
+  }
+
+  state.savingBulk = true;
+  setLoading(true);
+  setStatus(`Salvo 0/${rows.length} prodotti...`);
+  try {
+    let saved = 0;
+    const failures = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      setStatus(`Salvo ${index + 1}/${rows.length}: ${row.name}`);
+      try {
+        await window.magazzino.updateProduct(row);
+        saved += 1;
+      } catch (error) {
+        failures.push({ row, error: error.message || "Errore salvataggio" });
+        continue;
+      }
+      const rowIndex = state.rows.findIndex((current) => rowKey(current) === rowKey(row));
+      if (rowIndex >= 0) state.rows[rowIndex] = row;
+      state.dirtyRows.delete(rowKey(row));
+      renderRows();
+    }
+
+    if (failures.length) {
+      setStatus(`${saved} salvati, ${failures.length} non salvati. ${failures[0].error}`, "error");
+    } else {
+      setStatus(`${saved} prodotti salvati.`, "ok");
+    }
+  } catch (error) {
+    setStatus(error.message || "Errore durante il salvataggio bulk.", "error");
+  } finally {
+    state.savingBulk = false;
+    setLoading(false);
+    renderRows();
+  }
+}
+
+function discardAllChanges() {
+  state.dirtyRows.clear();
+  setStatus("Modifiche annullate.");
+  renderRows();
 }
 
 els.configForm.addEventListener("submit", async (event) => {
@@ -498,6 +629,8 @@ document.addEventListener("keydown", (event) => {
 
 els.refreshButton.addEventListener("click", () => loadProducts(1));
 els.menuRefreshButton.addEventListener("click", () => loadProducts(1));
+els.saveAllButton.addEventListener("click", saveAllChanges);
+els.discardAllButton.addEventListener("click", discardAllChanges);
 els.updateButton.addEventListener("click", async () => {
   try {
     setUpdateStatus("Controllo aggiornamenti...");
@@ -537,7 +670,14 @@ els.searchInput.addEventListener("keydown", (event) => {
 els.productBody.addEventListener("input", (event) => {
   if (state.cacheSyncing) return;
   const tr = event.target.closest("tr");
-  if (tr) tr.classList.add("dirty");
+  if (!tr) return;
+  const index = Number(tr.dataset.index);
+  const values = editableSnapshot(editableRow(state.rows[index]));
+  tr.querySelectorAll("input[data-field]").forEach((input) => {
+    values[input.dataset.field] = input.value.trim();
+  });
+  setDirtyRow(index, values);
+  tr.classList.toggle("dirty", state.dirtyRows.has(rowKey(state.rows[index])));
 });
 
 els.productBody.addEventListener("click", (event) => {
@@ -548,7 +688,14 @@ els.productBody.addEventListener("click", (event) => {
 els.gridShell.addEventListener("input", (event) => {
   if (state.cacheSyncing) return;
   const card = event.target.closest(".productCard");
-  if (card) card.classList.add("dirty");
+  if (!card) return;
+  const index = Number(event.target.dataset.index);
+  const values = editableSnapshot(editableRow(state.rows[index]));
+  card.querySelectorAll("input[data-field]").forEach((input) => {
+    values[input.dataset.field] = input.value.trim();
+  });
+  setDirtyRow(index, values);
+  card.classList.toggle("dirty", state.dirtyRows.has(rowKey(state.rows[index])));
 });
 
 els.gridShell.addEventListener("click", (event) => {

@@ -1145,11 +1145,7 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
   };
 });
 
-ipcMain.handle("products:update", async (_event, row) => {
-  if (productCacheStatus.syncing) {
-    throw new Error("Cache prodotti in generazione. Attendi il completamento prima di modificare.");
-  }
-
+async function updateProductRemote(row) {
   const body = {
     regular_price: String(row.regularPrice ?? "").trim(),
     sale_price: String(row.salePrice ?? "").trim(),
@@ -1166,11 +1162,15 @@ ipcMain.handle("products:update", async (_event, row) => {
     body
   });
   addDiagnostic("products", `Prodotto ${row.parentId ? `${row.parentId}/` : ""}${row.id} salvato.`);
+}
 
+async function updateRowsInProductCache(rows) {
   const cache = await readProductCache();
-  if (cache.rows && cache.rows.length) {
+  const updates = Array.isArray(rows) ? rows : [rows];
+  if (cache.rows && cache.rows.length && updates.length) {
     cache.rows = cache.rows.map((cachedRow) => {
-      if (cachedRow.id !== row.id || cachedRow.parentId !== row.parentId) return cachedRow;
+      const row = updates.find((update) => cachedRow.id === update.id && cachedRow.parentId === update.parentId);
+      if (!row) return cachedRow;
       return {
         ...cachedRow,
         regularPrice: row.regularPrice,
@@ -1181,6 +1181,53 @@ ipcMain.handle("products:update", async (_event, row) => {
     cache.updatedAt = new Date().toISOString();
     await writeProductCache(cache);
   }
+}
+
+ipcMain.handle("products:update", async (_event, row) => {
+  if (productCacheStatus.syncing) {
+    throw new Error("Cache prodotti in generazione. Attendi il completamento prima di modificare.");
+  }
+
+  await updateProductRemote(row);
+  await updateRowsInProductCache(row);
 
   return true;
+});
+
+ipcMain.handle("products:bulk-update", async (_event, rows = []) => {
+  if (productCacheStatus.syncing) {
+    throw new Error("Cache prodotti in generazione. Attendi il completamento prima di modificare.");
+  }
+
+  const updates = Array.isArray(rows) ? rows : [];
+  const results = await mapLimit(updates, 2, async (row) => {
+    try {
+      await updateProductRemote(row);
+      return {
+        ok: true,
+        id: row.id,
+        parentId: row.parentId || null,
+        sku: row.sku || ""
+      };
+    } catch (error) {
+      addDiagnostic("products", `Errore salvataggio ${row.parentId ? `${row.parentId}/` : ""}${row.id}${row.sku ? ` SKU ${row.sku}` : ""}: ${error.message}`);
+      return {
+        ok: false,
+        id: row.id,
+        parentId: row.parentId || null,
+        sku: row.sku || "",
+        error: error.message || "Errore salvataggio"
+      };
+    }
+  });
+
+  const savedRows = updates.filter((row) => results.some((result) => result.ok && result.id === row.id && result.parentId === (row.parentId || null)));
+  await updateRowsInProductCache(savedRows);
+  addDiagnostic("products", `Salvataggio bulk completato: ${savedRows.length} salvati, ${updates.length - savedRows.length} non salvati.`);
+
+  return {
+    saved: savedRows.length,
+    failed: updates.length - savedRows.length,
+    results
+  };
 });
