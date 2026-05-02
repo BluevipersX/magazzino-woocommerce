@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld("magazzino", {
   getCacheStatus: () => ipcRenderer.invoke("cache:status"),
   getCacheInfo: () => ipcRenderer.invoke("cache:info"),
   clearCache: () => ipcRenderer.invoke("cache:clear"),
+  clearImageCache: () => ipcRenderer.invoke("cache:clear-images"),
   refreshCachePage: (page) => ipcRenderer.invoke("cache:refresh-page", page),
   getDiagnostics: () => ipcRenderer.invoke("diagnostics:get"),
   getHistory: () => ipcRenderer.invoke("history:get"),
@@ -35,6 +36,16 @@ contextBridge.exposeInMainWorld("magazzino", {
     const listener = (_event, status) => callback(status);
     ipcRenderer.on("cache:status", listener);
     return () => ipcRenderer.removeListener("cache:status", listener);
+  },
+  onImageCached: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("images:cached", listener);
+    return () => ipcRenderer.removeListener("images:cached", listener);
+  },
+  onImagesCleared: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("images:cleared", listener);
+    return () => ipcRenderer.removeListener("images:cleared", listener);
   },
   onWindowMaximized: (callback) => {
     const listener = (_event, isMaximized) => callback(isMaximized);

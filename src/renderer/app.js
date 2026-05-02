@@ -41,6 +41,7 @@ const els = {
   testButton: document.querySelector("#testButton"),
   clearCacheButton: document.querySelector("#clearCacheButton"),
   refreshCachePageButton: document.querySelector("#refreshCachePageButton"),
+  clearImageCacheButton: document.querySelector("#clearImageCacheButton"),
   diagnosticsButton: document.querySelector("#diagnosticsButton"),
   cacheInfoText: document.querySelector("#cacheInfoText"),
   diagnosticsText: document.querySelector("#diagnosticsText"),
@@ -164,7 +165,8 @@ async function refreshCacheInfo() {
   const info = await window.magazzino.getCacheInfo();
   const pages = info.cachedPages && info.cachedPages.length ? info.cachedPages.join(", ") : "nessuna";
   const updatedAt = info.updatedAt ? new Date(info.updatedAt).toLocaleString("it-IT") : "mai";
-  els.cacheInfoText.textContent = `Tipo: ${info.type || "Cache"}. Pagine: ${pages}. Righe: ${info.rows}. Totale sito: ${info.total || "-"}. Ultimo update: ${updatedAt}. File: ${info.exists ? formatBytes(info.size) : "non presente"} - ${info.path}`;
+  const imageCache = info.imageCache || {};
+  els.cacheInfoText.textContent = `Tipo: ${info.type || "Cache"}. Pagine: ${pages}. Righe: ${info.rows}. Totale sito: ${info.total || "-"}. Ultimo update: ${updatedAt}. DB: ${info.exists ? formatBytes(info.size) : "non presente"}. Immagini: ${imageCache.files || 0} file, ${formatBytes(imageCache.size || 0)} - ${info.path}`;
 }
 
 async function openDiagnostics() {
@@ -227,6 +229,10 @@ function stockLabel(stockStatus) {
   if (stockStatus === "outofstock") return "Esaurito";
   if (stockStatus === "onbackorder") return "Arretrato";
   return "Disponibile";
+}
+
+function imageSrc(row) {
+  return row.cachedImageUrl || row.imageUrl || "";
 }
 
 function rowKey(row) {
@@ -369,8 +375,8 @@ function renderRows() {
         <td>
           <div class="productThumb">
             ${
-              row.imageUrl
-                ? `<img src="${escapeAttr(row.imageUrl)}" alt="${escapeAttr(row.imageAlt || row.name)}" loading="lazy" />`
+              imageSrc(row)
+                ? `<img src="${escapeAttr(imageSrc(row))}" alt="${escapeAttr(row.imageAlt || row.name)}" loading="lazy" />`
                 : `<span>N/D</span>`
             }
           </div>
@@ -401,8 +407,8 @@ function renderRows() {
       <article class="productCard ${row.stockStatus}${dirtyClass}">
         <div class="cardImage">
           ${
-            row.imageUrl
-              ? `<img src="${escapeAttr(row.imageUrl)}" alt="${escapeAttr(row.imageAlt || row.name)}" loading="lazy" />`
+            imageSrc(row)
+              ? `<img src="${escapeAttr(imageSrc(row))}" alt="${escapeAttr(row.imageAlt || row.name)}" loading="lazy" />`
               : `<span>N/D</span>`
           }
         </div>
@@ -768,6 +774,25 @@ els.refreshCachePageButton.addEventListener("click", async () => {
   }
 });
 
+els.clearImageCacheButton.addEventListener("click", async () => {
+  try {
+    setStatus("Svuoto cache immagini...");
+    await window.magazzino.clearImageCache();
+    state.rows = state.rows.map((row) => ({
+      ...row,
+      cachedImageUrl: "",
+      imageLocalPath: "",
+      imageStatus: "",
+      imageDownloadedAt: ""
+    }));
+    await refreshCacheInfo();
+    renderRows();
+    setStatus("Cache immagini svuotata.", "ok");
+  } catch (error) {
+    setStatus(error.message || "Impossibile svuotare la cache immagini.", "error");
+  }
+});
+
 els.diagnosticsButton.addEventListener("click", openDiagnostics);
 els.refreshDiagnosticsButton.addEventListener("click", async () => {
   els.diagnosticsText.value = await window.magazzino.getDiagnostics();
@@ -908,6 +933,28 @@ els.gridShell.addEventListener("click", (event) => {
 
 window.magazzino.onUpdateState(setUpdateStatus);
 window.magazzino.onCacheStatus(setCacheStatus);
+window.magazzino.onImageCached((payload) => {
+  const index = state.rows.findIndex((row) => rowKey(row) === payload.rowKey);
+  if (index < 0) return;
+  state.rows[index] = {
+    ...state.rows[index],
+    cachedImageUrl: payload.cachedImageUrl || "",
+    imageLocalPath: payload.imageLocalPath || "",
+    imageStatus: payload.imageStatus || "",
+    imageDownloadedAt: payload.imageDownloadedAt || ""
+  };
+  renderRows();
+});
+window.magazzino.onImagesCleared(() => {
+  state.rows = state.rows.map((row) => ({
+    ...row,
+    cachedImageUrl: "",
+    imageLocalPath: "",
+    imageStatus: "",
+    imageDownloadedAt: ""
+  }));
+  renderRows();
+});
 window.magazzino.onWindowMaximized((isMaximized) => {
   els.maximizeButton.textContent = isMaximized ? "[_]" : "[ ]";
 });

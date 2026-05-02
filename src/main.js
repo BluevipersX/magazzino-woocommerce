@@ -2,6 +2,8 @@ const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require("electron")
 const { autoUpdater } = require("electron-updater");
 const Database = require("better-sqlite3");
 const path = require("path");
+const crypto = require("crypto");
+const { pathToFileURL } = require("url");
 const fs = require("fs/promises");
 
 let mainWindow;
@@ -355,8 +357,10 @@ const configPath = () => path.join(app.getPath("userData"), "config.json");
 const productCachePath = () => path.join(app.getPath("userData"), "products-cache.json");
 const productCacheBackupPath = () => path.join(app.getPath("userData"), "products-cache.json.backup");
 const productCacheDbPath = () => path.join(app.getPath("userData"), "products-cache.sqlite");
+const imageCacheDir = () => path.join(app.getPath("userData"), "image-cache");
 const changeHistoryPath = () => path.join(app.getPath("userData"), "change-history.json");
 let productDb = null;
+const imageDownloads = new Set();
 
 async function readConfig() {
   try {
@@ -399,6 +403,9 @@ function serializeCacheRow(row = {}) {
     sku: String(row.sku || ""),
     imageUrl: String(row.imageUrl || ""),
     imageAlt: String(row.imageAlt || ""),
+    imageLocalPath: String(row.imageLocalPath || ""),
+    imageStatus: String(row.imageStatus || ""),
+    imageDownloadedAt: String(row.imageDownloadedAt || ""),
     regularPrice: String(row.regularPrice ?? ""),
     salePrice: String(row.salePrice ?? ""),
     stockQuantity: String(row.stockQuantity ?? ""),
@@ -422,6 +429,8 @@ function deserializeCacheRow(row = {}) {
     attributes = [];
   }
 
+  const imageLocalPath = row.imageLocalPath || "";
+  const imageStatus = row.imageStatus || "";
   return {
     id: row.id,
     parentId: row.parentId,
@@ -430,6 +439,10 @@ function deserializeCacheRow(row = {}) {
     sku: row.sku || "",
     imageUrl: row.imageUrl || "",
     imageAlt: row.imageAlt || "",
+    imageLocalPath,
+    cachedImageUrl: imageLocalPath && imageStatus === "ok" ? pathToFileURL(imageLocalPath).toString() : "",
+    imageStatus,
+    imageDownloadedAt: row.imageDownloadedAt || "",
     regularPrice: row.regularPrice || "",
     salePrice: row.salePrice || "",
     stockQuantity: row.stockQuantity || "",
@@ -465,6 +478,9 @@ function getProductDb() {
       sku TEXT,
       image_url TEXT,
       image_alt TEXT,
+      image_local_path TEXT,
+      image_status TEXT,
+      image_downloaded_at TEXT,
       regular_price TEXT,
       sale_price TEXT,
       stock_quantity TEXT,
@@ -489,7 +505,16 @@ function getProductDb() {
     CREATE INDEX IF NOT EXISTS idx_product_rows_set_terms ON product_rows(set_terms);
     CREATE INDEX IF NOT EXISTS idx_product_rows_language_terms ON product_rows(language_terms);
   `);
+  ensureProductRowColumn(productDb, "image_local_path", "TEXT");
+  ensureProductRowColumn(productDb, "image_status", "TEXT");
+  ensureProductRowColumn(productDb, "image_downloaded_at", "TEXT");
+  productDb.prepare("CREATE INDEX IF NOT EXISTS idx_product_rows_image_status ON product_rows(image_status)").run();
   return productDb;
+}
+
+function ensureProductRowColumn(db, column, type) {
+  const exists = db.prepare("PRAGMA table_info(product_rows)").all().some((row) => row.name === column);
+  if (!exists) db.prepare(`ALTER TABLE product_rows ADD COLUMN ${column} ${type}`).run();
 }
 
 function setCacheMeta(db, key, value) {
@@ -531,6 +556,9 @@ function rowsFromDb(db) {
       sku,
       image_url AS imageUrl,
       image_alt AS imageAlt,
+      image_local_path AS imageLocalPath,
+      image_status AS imageStatus,
+      image_downloaded_at AS imageDownloadedAt,
       regular_price AS regularPrice,
       sale_price AS salePrice,
       stock_quantity AS stockQuantity,
@@ -567,13 +595,23 @@ function cacheFromDb(includeRows = true) {
 
 function writeCacheToDb(cache) {
   const db = getProductDb();
+  const existingImages = new Map(db.prepare(`
+    SELECT
+      row_key AS rowKey,
+      image_url AS imageUrl,
+      image_local_path AS imageLocalPath,
+      image_status AS imageStatus,
+      image_downloaded_at AS imageDownloadedAt
+    FROM product_rows
+    WHERE image_local_path != ''
+  `).all().map((row) => [row.rowKey, row]));
   const insertRow = db.prepare(`
     INSERT OR REPLACE INTO product_rows (
-      row_key, id, parent_id, type, name, sku, image_url, image_alt,
+      row_key, id, parent_id, type, name, sku, image_url, image_alt, image_local_path, image_status, image_downloaded_at,
       regular_price, sale_price, stock_quantity, stock_status, manage_stock,
       permalink, modified_at, cache_page, search_index, set_terms, language_terms, attributes_json
     ) VALUES (
-      @rowKey, @id, @parentId, @type, @name, @sku, @imageUrl, @imageAlt,
+      @rowKey, @id, @parentId, @type, @name, @sku, @imageUrl, @imageAlt, @imageLocalPath, @imageStatus, @imageDownloadedAt,
       @regularPrice, @salePrice, @stockQuantity, @stockStatus, @manageStock,
       @permalink, @modifiedAt, @cachePage, @searchIndex, @setTerms, @languageTerms, @attributesJson
     )
@@ -582,7 +620,16 @@ function writeCacheToDb(cache) {
     db.prepare("DELETE FROM product_rows").run();
     db.prepare("DELETE FROM cached_pages").run();
     for (const row of cache.rows || []) {
-      insertRow.run(serializeCacheRow(row));
+      const existingImage = existingImages.get(rowKey(row));
+      const rowWithImage = existingImage && existingImage.imageUrl === row.imageUrl
+        ? {
+            ...row,
+            imageLocalPath: row.imageLocalPath || existingImage.imageLocalPath || "",
+            imageStatus: row.imageStatus || existingImage.imageStatus || "",
+            imageDownloadedAt: row.imageDownloadedAt || existingImage.imageDownloadedAt || ""
+          }
+        : row;
+      insertRow.run(serializeCacheRow(rowWithImage));
     }
     for (const page of cache.cachedPages || []) {
       db.prepare("INSERT OR REPLACE INTO cached_pages (page) VALUES (?)").run(Number(page));
@@ -701,6 +748,7 @@ async function getCacheInfo() {
     exists = true;
   } catch {}
   const rows = db.prepare("SELECT COUNT(*) AS count FROM product_rows").get().count;
+  const imageStats = await getImageCacheInfo();
 
   return {
     exists,
@@ -710,8 +758,48 @@ async function getCacheInfo() {
     rows,
     total: Number(cache.total || 0),
     updatedAt: cache.updatedAt || "",
+    size,
+    imageCache: imageStats
+  };
+}
+
+async function getImageCacheInfo() {
+  let size = 0;
+  let files = 0;
+  try {
+    const entries = await fs.readdir(imageCacheDir(), { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const stats = await fs.stat(path.join(imageCacheDir(), entry.name));
+      size += stats.size;
+      files += 1;
+    }
+  } catch {}
+
+  let rows = 0;
+  try {
+    rows = getProductDb().prepare("SELECT COUNT(*) AS count FROM product_rows WHERE image_status = 'ok' AND image_local_path != ''").get().count;
+  } catch {}
+
+  return {
+    path: imageCacheDir(),
+    files,
+    rows,
     size
   };
+}
+
+async function clearImageCache() {
+  try {
+    await fs.rm(imageCacheDir(), { recursive: true, force: true });
+  } catch {}
+  const db = getProductDb();
+  db.prepare("UPDATE product_rows SET image_local_path = '', image_status = '', image_downloaded_at = ''").run();
+  addDiagnostic("images", "Cache immagini svuotata.");
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("images:cleared");
+  }
+  return getCacheInfo();
 }
 
 async function clearProductCache() {
@@ -895,6 +983,99 @@ async function wooRequest(pathname, options = {}) {
     ? "WooCommerce non risponde entro 35 secondi."
     : (lastError && lastError.message ? lastError.message : "fetch failed");
   throw new Error(`Connessione WooCommerce non riuscita: ${message}`);
+}
+
+function imageExtensionFrom(contentType = "", imageUrl = "") {
+  const type = String(contentType || "").toLowerCase();
+  if (type.includes("png")) return ".png";
+  if (type.includes("webp")) return ".webp";
+  if (type.includes("gif")) return ".gif";
+  if (type.includes("avif")) return ".avif";
+  if (type.includes("jpeg") || type.includes("jpg")) return ".jpg";
+  try {
+    const ext = path.extname(new URL(imageUrl).pathname).toLowerCase();
+    if ([".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"].includes(ext)) return ext === ".jpeg" ? ".jpg" : ext;
+  } catch {}
+  return ".img";
+}
+
+function imageCacheFilePath(row, contentType = "") {
+  const hash = crypto.createHash("sha1").update(row.imageUrl || rowKey(row)).digest("hex");
+  return path.join(imageCacheDir(), `${row.parentId || 0}-${row.id}-${hash}${imageExtensionFrom(contentType, row.imageUrl)}`);
+}
+
+function updateImageCacheRow(row, imageLocalPath, imageStatus) {
+  const downloadedAt = imageStatus === "ok" ? new Date().toISOString() : "";
+  getProductDb().prepare(`
+    UPDATE product_rows
+    SET image_local_path = @imageLocalPath,
+        image_status = @imageStatus,
+        image_downloaded_at = @downloadedAt
+    WHERE row_key = @rowKey
+  `).run({
+    rowKey: rowKey(row),
+    imageLocalPath: imageLocalPath || "",
+    imageStatus,
+    downloadedAt
+  });
+  return downloadedAt;
+}
+
+async function cacheProductImage(row) {
+  if (!row || !row.imageUrl) return;
+  const key = rowKey(row);
+  if (imageDownloads.has(key)) return;
+  imageDownloads.add(key);
+
+  try {
+    if (row.imageLocalPath && row.imageStatus === "ok") {
+      try {
+        await fs.access(row.imageLocalPath);
+        return;
+      } catch {}
+    }
+
+    await fs.mkdir(imageCacheDir(), { recursive: true });
+    const response = await fetch(row.imageUrl, { signal: AbortSignal.timeout(25000) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.toLowerCase().startsWith("image/")) throw new Error("contenuto non immagine");
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const maxBytes = 8 * 1024 * 1024;
+    if (buffer.length > maxBytes) throw new Error("immagine troppo grande");
+
+    const filePath = imageCacheFilePath(row, contentType);
+    await fs.writeFile(filePath, buffer);
+    const downloadedAt = updateImageCacheRow(row, filePath, "ok");
+    const cachedImageUrl = pathToFileURL(filePath).toString();
+    addDiagnostic("images", `Immagine cache ok ID ${row.id}${row.parentId ? ` padre ${row.parentId}` : ""}: ${formatBytes(buffer.length)}.`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("images:cached", {
+        rowKey: key,
+        imageLocalPath: filePath,
+        cachedImageUrl,
+        imageStatus: "ok",
+        imageDownloadedAt: downloadedAt
+      });
+    }
+  } catch (error) {
+    updateImageCacheRow(row, "", "error");
+    addDiagnostic("images", `Immagine cache errore ID ${row.id}${row.parentId ? ` padre ${row.parentId}` : ""}: ${error.message}`);
+  } finally {
+    imageDownloads.delete(key);
+  }
+}
+
+function scheduleImageCacheForRows(rows = []) {
+  const pendingRows = rows
+    .filter((row) => row && row.imageUrl && (!row.imageLocalPath || row.imageStatus !== "ok"))
+    .slice(0, 100);
+  pendingRows.forEach((row, index) => {
+    setTimeout(() => {
+      cacheProductImage(row).catch(() => {});
+    }, index * 80);
+  });
 }
 
 function productRow(product, variation = null) {
@@ -1141,6 +1322,9 @@ function localProductResultFromDb(cache, params = {}) {
       sku,
       image_url AS imageUrl,
       image_alt AS imageAlt,
+      image_local_path AS imageLocalPath,
+      image_status AS imageStatus,
+      image_downloaded_at AS imageDownloadedAt,
       regular_price AS regularPrice,
       sale_price AS salePrice,
       stock_quantity AS stockQuantity,
@@ -1177,9 +1361,19 @@ function mergeRows(existingRows = [], nextRows = []) {
   for (const row of nextRows) {
     const key = rowKey(row);
     const existing = map.get(key);
-    map.set(key, existing && existing.cachePage && !row.cachePage
-      ? { ...row, cachePage: existing.cachePage }
-      : row);
+    const preservedImage = existing && existing.imageUrl === row.imageUrl
+      ? {
+          imageLocalPath: existing.imageLocalPath || "",
+          cachedImageUrl: existing.cachedImageUrl || "",
+          imageStatus: existing.imageStatus || "",
+          imageDownloadedAt: existing.imageDownloadedAt || ""
+        }
+      : {};
+    map.set(key, {
+      ...row,
+      ...preservedImage,
+      cachePage: existing && existing.cachePage && !row.cachePage ? existing.cachePage : row.cachePage
+    });
   }
   return Array.from(map.values());
 }
@@ -1512,6 +1706,7 @@ ipcMain.handle("updates:check", async () => checkForUpdates());
 ipcMain.handle("cache:status", async () => productCacheStatus);
 ipcMain.handle("cache:info", async () => getCacheInfo());
 ipcMain.handle("cache:clear", async () => clearProductCache());
+ipcMain.handle("cache:clear-images", async () => clearImageCache());
 ipcMain.handle("cache:refresh-page", async (_event, page) => refreshCachePage(page));
 ipcMain.handle("diagnostics:get", async () => diagnosticLog.map((entry) => `[${entry.time}] ${entry.event}: ${entry.detail}`).join("\n"));
 ipcMain.handle("history:get", async () => (await readChangeHistory()).map(formatHistoryEntry).reverse().join("\n"));
@@ -1564,6 +1759,7 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
     addDiagnostic("cache", hasFilters
       ? `Ricerca locale pagina ${page}: ${localResult.rows.length}/${localResult.total} righe in ${Date.now() - startedAt}ms.`
       : (localResult.source === "cache" ? `Cache hit pagina ${page} in ${Date.now() - startedAt}ms.` : `Cache miss locale pagina ${page} in ${Date.now() - startedAt}ms.`));
+    scheduleImageCacheForRows(localResult.rows);
     return localResult;
   }
 
@@ -1610,6 +1806,7 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
         });
       }
       if (localResult.rows.length) {
+        scheduleImageCacheForRows(localResult.rows);
         return {
           ...localResult,
           source: "local-fallback",
@@ -1659,6 +1856,7 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
     addDiagnostic("cache", hasFilters
       ? `Ricerca remota pagina ${page} completata: ${pageRows.rows.length} righe in ${Date.now() - startedAt}ms.`
       : `Pagina ${page} scaricata: ${pageRows.rows.length} righe in ${Date.now() - startedAt}ms.`);
+    scheduleImageCacheForRows(pageRows.rows);
     return {
       rows: pageRows.rows,
       page,
@@ -1676,6 +1874,7 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
     refreshModifiedProducts(cache);
   }
 
+  scheduleImageCacheForRows(localResult.rows);
   return localResult;
 });
 
