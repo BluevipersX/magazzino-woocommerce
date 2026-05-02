@@ -827,6 +827,39 @@ tr.dirty td:first-child {
   width: min(820px, 100%);
 }
 
+.confirmDialog {
+  width: min(680px, 100%);
+}
+
+.changeSummary {
+  max-height: min(360px, 48vh);
+  display: grid;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.changeItem {
+  display: grid;
+  gap: 4px;
+  padding: 11px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-primary) 5%, var(--color-surface));
+}
+
+.changeItem strong {
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.changeItem span,
+.changeItem small {
+  color: var(--color-text-soft);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .helpDialog {
   width: min(460px, 100%);
 }
@@ -871,7 +904,8 @@ tr.dirty td:first-child {
   grid-template-columns: 1fr;
 }
 
-#diagnosticsText {
+#diagnosticsText,
+#historyText {
   width: 100%;
   height: min(460px, 55vh);
   padding: 12px;

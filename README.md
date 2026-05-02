@@ -47,7 +47,7 @@ Il programma verra generato in `release`.
 
 L'installer principale avra un nome simile a:
 
-`Magazzino-WooCommerce-Setup-0.1.29.exe`
+`Magazzino-WooCommerce-Setup-0.1.30.exe`
 
 L'utente dovra solo aprire quell'eseguibile e seguire l'installazione.
 

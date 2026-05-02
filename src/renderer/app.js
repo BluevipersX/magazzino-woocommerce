@@ -31,6 +31,8 @@ const els = {
   configForm: document.querySelector("#configForm"),
   configModal: document.querySelector("#configModal"),
   diagnosticsModal: document.querySelector("#diagnosticsModal"),
+  historyModal: document.querySelector("#historyModal"),
+  confirmSaveModal: document.querySelector("#confirmSaveModal"),
   settingsButton: document.querySelector("#settingsButton"),
   closeSettingsButton: document.querySelector("#closeSettingsButton"),
   storeUrl: document.querySelector("#storeUrl"),
@@ -45,6 +47,17 @@ const els = {
   refreshDiagnosticsButton: document.querySelector("#refreshDiagnosticsButton"),
   copyDiagnosticsButton: document.querySelector("#copyDiagnosticsButton"),
   closeDiagnosticsButton: document.querySelector("#closeDiagnosticsButton"),
+  historyButton: document.querySelector("#historyButton"),
+  clearHistoryButton: document.querySelector("#clearHistoryButton"),
+  copyHistoryButton: document.querySelector("#copyHistoryButton"),
+  historyText: document.querySelector("#historyText"),
+  refreshHistoryButton: document.querySelector("#refreshHistoryButton"),
+  copyHistoryModalButton: document.querySelector("#copyHistoryModalButton"),
+  closeHistoryButton: document.querySelector("#closeHistoryButton"),
+  confirmSaveTitle: document.querySelector("#confirmSaveTitle"),
+  confirmSaveSummary: document.querySelector("#confirmSaveSummary"),
+  confirmSaveButton: document.querySelector("#confirmSaveButton"),
+  cancelSaveButton: document.querySelector("#cancelSaveButton"),
   searchInput: document.querySelector("#searchInput"),
   setFilter: document.querySelector("#setFilter"),
   languageFilter: document.querySelector("#languageFilter"),
@@ -164,6 +177,24 @@ function closeDiagnostics() {
   els.diagnosticsModal.setAttribute("aria-hidden", "true");
 }
 
+async function openHistory() {
+  els.historyModal.classList.add("open");
+  els.historyModal.setAttribute("aria-hidden", "false");
+  els.historyText.value = await window.magazzino.getHistory();
+}
+
+function closeHistory() {
+  els.historyModal.classList.remove("open");
+  els.historyModal.setAttribute("aria-hidden", "true");
+}
+
+async function copyHistory() {
+  const history = await window.magazzino.getHistory();
+  els.historyText.value = history;
+  await navigator.clipboard.writeText(history);
+  setStatus("Storico copiato.", "ok");
+}
+
 async function openHelp() {
   try {
     const version = await window.magazzino.getAppVersion();
@@ -219,6 +250,60 @@ function rowHasChanges(row, values) {
   return original.regularPrice !== values.regularPrice
     || original.salePrice !== values.salePrice
     || original.stockQuantity !== values.stockQuantity;
+}
+
+function changeList(row) {
+  const original = state.rows.find((current) => rowKey(current) === rowKey(row)) || row;
+  const fields = [
+    ["regularPrice", "Prezzo"],
+    ["salePrice", "Sconto"],
+    ["stockQuantity", "Quantita"]
+  ];
+  return fields
+    .filter(([field]) => moneyValue(original[field]).trim() !== moneyValue(row[field]).trim())
+    .map(([field, label]) => `${label}: ${moneyValue(original[field]).trim() || "-"} -> ${moneyValue(row[field]).trim() || "-"}`);
+}
+
+function renderChangeSummary(rows) {
+  return rows.map((row) => {
+    const changes = changeList(row);
+    return `
+      <div class="changeItem">
+        <strong>${escapeHtml(row.name)}</strong>
+        <span>SKU ${escapeHtml(row.sku || "-")} - ID ${escapeHtml(row.id)}</span>
+        <small>${escapeHtml(changes.join("; ") || "Nessuna differenza")}</small>
+      </div>
+    `;
+  }).join("");
+}
+
+function confirmBulkSave(rows) {
+  els.confirmSaveTitle.textContent = rows.length === 1
+    ? "Salvare 1 prodotto modificato?"
+    : `Salvare ${rows.length} prodotti modificati?`;
+  els.confirmSaveSummary.innerHTML = renderChangeSummary(rows);
+  els.confirmSaveModal.classList.add("open");
+  els.confirmSaveModal.setAttribute("aria-hidden", "false");
+
+  return new Promise((resolve) => {
+    const done = (confirmed) => {
+      els.confirmSaveModal.classList.remove("open");
+      els.confirmSaveModal.setAttribute("aria-hidden", "true");
+      els.confirmSaveButton.removeEventListener("click", onConfirm);
+      els.cancelSaveButton.removeEventListener("click", onCancel);
+      els.confirmSaveModal.removeEventListener("click", onOverlay);
+      resolve(confirmed);
+    };
+    const onConfirm = () => done(true);
+    const onCancel = () => done(false);
+    const onOverlay = (event) => {
+      if (event.target === els.confirmSaveModal) done(false);
+    };
+
+    els.confirmSaveButton.addEventListener("click", onConfirm);
+    els.cancelSaveButton.addEventListener("click", onCancel);
+    els.confirmSaveModal.addEventListener("click", onOverlay);
+  });
 }
 
 function updateBulkControls() {
@@ -458,7 +543,7 @@ async function saveRow(tr) {
   setLoading(true);
   setStatus(`Salvataggio ${row.name}...`);
   try {
-    await window.magazzino.updateProduct(row);
+    await window.magazzino.updateProduct(row, state.rows[index]);
     state.rows[index] = row;
     state.dirtyRows.delete(rowKey(row));
     setStatus("Prodotto aggiornato.", "ok");
@@ -491,7 +576,7 @@ async function saveGridCard(button) {
   setLoading(true);
   setStatus(`Salvataggio ${row.name}...`);
   try {
-    await window.magazzino.updateProduct(row);
+    await window.magazzino.updateProduct(row, state.rows[index]);
     state.rows[index] = row;
     state.dirtyRows.delete(rowKey(row));
     setStatus("Prodotto aggiornato.", "ok");
@@ -521,6 +606,12 @@ async function saveAllChanges() {
     return;
   }
 
+  const confirmed = await confirmBulkSave(rows);
+  if (!confirmed) {
+    setStatus("Salvataggio annullato.");
+    return;
+  }
+
   state.savingBulk = true;
   setLoading(true);
   setStatus(`Salvo 0/${rows.length} prodotti...`);
@@ -531,7 +622,8 @@ async function saveAllChanges() {
       const row = rows[index];
       setStatus(`Salvo ${index + 1}/${rows.length}: ${row.name}`);
       try {
-        await window.magazzino.updateProduct(row);
+        const previousRow = state.rows.find((current) => rowKey(current) === rowKey(row)) || row;
+        await window.magazzino.updateProduct(row, previousRow);
         saved += 1;
       } catch (error) {
         failures.push({ row, error: error.message || "Errore salvataggio" });
@@ -635,10 +727,33 @@ els.closeDiagnosticsButton.addEventListener("click", closeDiagnostics);
 els.diagnosticsModal.addEventListener("click", (event) => {
   if (event.target === els.diagnosticsModal) closeDiagnostics();
 });
+els.historyButton.addEventListener("click", openHistory);
+els.refreshHistoryButton.addEventListener("click", async () => {
+  els.historyText.value = await window.magazzino.getHistory();
+});
+els.copyHistoryButton.addEventListener("click", copyHistory);
+els.copyHistoryModalButton.addEventListener("click", copyHistory);
+els.clearHistoryButton.addEventListener("click", async () => {
+  await window.magazzino.clearHistory();
+  els.historyText.value = "";
+  setStatus("Storico svuotato.", "ok");
+});
+els.closeHistoryButton.addEventListener("click", closeHistory);
+els.historyModal.addEventListener("click", (event) => {
+  if (event.target === els.historyModal) closeHistory();
+});
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && els.diagnosticsModal.classList.contains("open")) {
     closeDiagnostics();
+    return;
+  }
+  if (event.key === "Escape" && els.historyModal.classList.contains("open")) {
+    closeHistory();
+    return;
+  }
+  if (event.key === "Escape" && els.confirmSaveModal.classList.contains("open")) {
+    els.cancelSaveButton.click();
     return;
   }
   if (event.key === "Escape" && els.configModal.classList.contains("open")) {

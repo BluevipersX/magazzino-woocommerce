@@ -351,6 +351,7 @@ app.on("activate", () => {
 
 const configPath = () => path.join(app.getPath("userData"), "config.json");
 const productCachePath = () => path.join(app.getPath("userData"), "products-cache.json");
+const changeHistoryPath = () => path.join(app.getPath("userData"), "change-history.json");
 
 async function readConfig() {
   try {
@@ -395,6 +396,58 @@ async function readProductCache() {
 async function writeProductCache(cache) {
   await fs.mkdir(path.dirname(productCachePath()), { recursive: true });
   await fs.writeFile(productCachePath(), JSON.stringify(cache, null, 2), "utf8");
+}
+
+function historyRow(row = {}) {
+  return {
+    id: row.id,
+    parentId: row.parentId || null,
+    name: row.name || "",
+    sku: row.sku || "",
+    regularPrice: String(row.regularPrice ?? ""),
+    salePrice: String(row.salePrice ?? ""),
+    stockQuantity: String(row.stockQuantity ?? "")
+  };
+}
+
+async function readChangeHistory() {
+  try {
+    const raw = await fs.readFile(changeHistoryPath(), "utf8");
+    const entries = JSON.parse(raw);
+    return Array.isArray(entries) ? entries : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeChangeHistory(entries) {
+  await fs.mkdir(path.dirname(changeHistoryPath()), { recursive: true });
+  await fs.writeFile(changeHistoryPath(), JSON.stringify(entries.slice(-300), null, 2), "utf8");
+}
+
+async function appendChangeHistory(entry) {
+  const history = await readChangeHistory();
+  history.push({
+    time: new Date().toISOString(),
+    ...entry
+  });
+  await writeChangeHistory(history);
+}
+
+function formatHistoryEntry(entry) {
+  const before = entry.before || {};
+  const after = entry.after || {};
+  const changes = ["regularPrice", "salePrice", "stockQuantity"]
+    .filter((field) => String(before[field] ?? "") !== String(after[field] ?? ""))
+    .map((field) => `${field}: ${before[field] ?? ""} -> ${after[field] ?? ""}`)
+    .join("; ");
+  return `[${entry.time}] ${entry.status} ID ${entry.productId}${entry.parentId ? ` padre ${entry.parentId}` : ""} SKU ${entry.sku || "-"} ${entry.name || ""}${changes ? ` | ${changes}` : ""}${entry.error ? ` | ${entry.error}` : ""}`;
+}
+
+async function clearChangeHistory() {
+  await writeChangeHistory([]);
+  addDiagnostic("history", "Storico modifiche svuotato.");
+  return true;
 }
 
 async function getCacheInfo() {
@@ -1024,6 +1077,8 @@ ipcMain.handle("cache:info", async () => getCacheInfo());
 ipcMain.handle("cache:clear", async () => clearProductCache());
 ipcMain.handle("cache:refresh-page", async (_event, page) => refreshCachePage(page));
 ipcMain.handle("diagnostics:get", async () => diagnosticLog.map((entry) => `[${entry.time}] ${entry.event}: ${entry.detail}`).join("\n"));
+ipcMain.handle("history:get", async () => (await readChangeHistory()).map(formatHistoryEntry).reverse().join("\n"));
+ipcMain.handle("history:clear", async () => clearChangeHistory());
 ipcMain.handle("window:minimize", () => mainWindow.minimize());
 ipcMain.handle("window:toggle-maximize", () => {
   if (mainWindow.isMaximized()) mainWindow.unmaximize();
@@ -1184,13 +1239,37 @@ async function updateRowsInProductCache(rows) {
   }
 }
 
-ipcMain.handle("products:update", async (_event, row) => {
+ipcMain.handle("products:update", async (_event, row, previousRow = null) => {
   if (productCacheStatus.syncing) {
     throw new Error("Cache prodotti in generazione. Attendi il completamento prima di modificare.");
   }
 
-  await updateProductRemote(row);
-  await updateRowsInProductCache(row);
+  try {
+    await updateProductRemote(row);
+    await updateRowsInProductCache(row);
+    await appendChangeHistory({
+      status: "ok",
+      productId: row.id,
+      parentId: row.parentId || null,
+      name: row.name || "",
+      sku: row.sku || "",
+      before: historyRow(previousRow || row),
+      after: historyRow(row)
+    });
+  } catch (error) {
+    await appendChangeHistory({
+      status: "errore",
+      productId: row.id,
+      parentId: row.parentId || null,
+      name: row.name || "",
+      sku: row.sku || "",
+      before: historyRow(previousRow || row),
+      after: historyRow(row),
+      error: error.message || "Errore salvataggio"
+    });
+    addDiagnostic("products", `Errore salvataggio ${row.parentId ? `${row.parentId}/` : ""}${row.id}${row.sku ? ` SKU ${row.sku}` : ""}: ${error.message}`);
+    throw error;
+  }
 
   return true;
 });
