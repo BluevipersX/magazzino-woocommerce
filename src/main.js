@@ -361,6 +361,7 @@ const imageCacheDir = () => path.join(app.getPath("userData"), "image-cache");
 const changeHistoryPath = () => path.join(app.getPath("userData"), "change-history.json");
 let productDb = null;
 const imageDownloads = new Set();
+let ftsAvailable = false;
 
 async function readConfig() {
   try {
@@ -388,6 +389,22 @@ function productRowTerms(row = {}, wantedKeys = []) {
     .map((attr) => attr.term)
     .filter(Boolean)
     .join(" ");
+}
+
+function productFtsText(row = {}) {
+  const attributes = (row.attributes || [])
+    .flatMap((attr) => [attr.key, attr.term, attr.value])
+    .filter(Boolean)
+    .join(" ");
+  return normalizeSearchText([
+    row.name,
+    row.sku,
+    row.id,
+    row.parentId,
+    row.type,
+    row.stockStatus,
+    attributes
+  ].join(" "));
 }
 
 function serializeCacheRow(row = {}) {
@@ -509,7 +526,58 @@ function getProductDb() {
   ensureProductRowColumn(productDb, "image_status", "TEXT");
   ensureProductRowColumn(productDb, "image_downloaded_at", "TEXT");
   productDb.prepare("CREATE INDEX IF NOT EXISTS idx_product_rows_image_status ON product_rows(image_status)").run();
+  setupFts(productDb);
   return productDb;
+}
+
+function setupFts(db) {
+  try {
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS product_rows_fts USING fts5(
+        row_key UNINDEXED,
+        content,
+        tokenize = 'unicode61 remove_diacritics 2'
+      );
+    `);
+    ftsAvailable = true;
+    const rowCount = db.prepare("SELECT COUNT(*) AS count FROM product_rows").get().count;
+    const ftsCount = db.prepare("SELECT COUNT(*) AS count FROM product_rows_fts").get().count;
+    const ftsVersion = getCacheMeta(db, "ftsVersion", "");
+    if (rowCount && (ftsCount !== rowCount || ftsVersion !== "1")) {
+      rebuildFtsIndex(db);
+    }
+  } catch (error) {
+    ftsAvailable = false;
+    addDiagnostic("sqlite", `FTS5 non disponibile, uso LIKE: ${error.message}`);
+  }
+}
+
+function rebuildFtsIndex(db = getProductDb()) {
+  if (!ftsAvailable) return;
+  try {
+    const rows = rowsFromDb(db);
+    const insertFts = db.prepare("INSERT INTO product_rows_fts (row_key, content) VALUES (?, ?)");
+    const transaction = db.transaction(() => {
+      db.prepare("DELETE FROM product_rows_fts").run();
+      rows.forEach((row) => insertFts.run(rowKey(row), productFtsText(row)));
+      setCacheMeta(db, "ftsVersion", "1");
+      setCacheMeta(db, "ftsUpdatedAt", new Date().toISOString());
+    });
+    transaction();
+    addDiagnostic("sqlite", `Indice FTS ricostruito: ${rows.length} righe.`);
+  } catch (error) {
+    ftsAvailable = false;
+    addDiagnostic("sqlite", `Ricostruzione FTS fallita, uso LIKE: ${error.message}`);
+  }
+}
+
+function ftsQueryText(search) {
+  const tokens = normalizeSearchText(search)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .map((token) => `${token.replace(/"/g, "")}*`);
+  return tokens.join(" ");
 }
 
 function ensureProductRowColumn(db, column, type) {
@@ -616,9 +684,13 @@ function writeCacheToDb(cache) {
       @permalink, @modifiedAt, @cachePage, @searchIndex, @setTerms, @languageTerms, @attributesJson
     )
   `);
+  const insertFts = ftsAvailable
+    ? db.prepare("INSERT INTO product_rows_fts (row_key, content) VALUES (?, ?)")
+    : null;
   const transaction = db.transaction(() => {
     db.prepare("DELETE FROM product_rows").run();
     db.prepare("DELETE FROM cached_pages").run();
+    if (ftsAvailable) db.prepare("DELETE FROM product_rows_fts").run();
     for (const row of cache.rows || []) {
       const existingImage = existingImages.get(rowKey(row));
       const rowWithImage = existingImage && existingImage.imageUrl === row.imageUrl
@@ -630,6 +702,7 @@ function writeCacheToDb(cache) {
           }
         : row;
       insertRow.run(serializeCacheRow(rowWithImage));
+      if (insertFts) insertFts.run(rowKey(rowWithImage), productFtsText(rowWithImage));
     }
     for (const page of cache.cachedPages || []) {
       db.prepare("INSERT OR REPLACE INTO cached_pages (page) VALUES (?)").run(Number(page));
@@ -640,6 +713,10 @@ function writeCacheToDb(cache) {
     setCacheMeta(db, "processedProducts", Number(cache.processedProducts || 0));
     setCacheMeta(db, "downloadedBytes", Number(cache.downloadedBytes || 0));
     setCacheMeta(db, "updatedAt", cache.updatedAt || "");
+    if (ftsAvailable) {
+      setCacheMeta(db, "ftsVersion", "1");
+      setCacheMeta(db, "ftsUpdatedAt", new Date().toISOString());
+    }
   });
   transaction();
 }
@@ -1274,13 +1351,25 @@ function localProductResultFromDb(cache, params = {}) {
   const hasFilters = Boolean(search || stockStatus || setTerm || languageTerm);
   const where = [];
   const bindings = {};
+  const useFts = Boolean(search && ftsAvailable);
+  let ftsSql = "";
+  let fromSql = "FROM product_rows";
+  let orderSql = "ORDER BY COALESCE(cache_page, 999999), name COLLATE NOCASE, id";
 
   if (hasFilters) {
     if (search) {
-      search.split(" ").forEach((token, index) => {
-        where.push(`search_index LIKE @search${index} ESCAPE '\\'`);
-        bindings[`search${index}`] = buildSqlLike(token);
-      });
+      if (useFts) {
+        ftsSql = ftsQueryText(search);
+        fromSql = "FROM product_rows JOIN product_rows_fts ON product_rows_fts.row_key = product_rows.row_key";
+        where.push("product_rows_fts MATCH @ftsQuery");
+        bindings.ftsQuery = ftsSql;
+        orderSql = "ORDER BY bm25(product_rows_fts), COALESCE(cache_page, 999999), name COLLATE NOCASE, id";
+      } else {
+        search.split(" ").forEach((token, index) => {
+          where.push(`search_index LIKE @search${index} ESCAPE '\\'`);
+          bindings[`search${index}`] = buildSqlLike(token);
+        });
+      }
     }
     if (stockStatus) {
       where.push("stock_status = @stockStatus");
@@ -1310,46 +1399,63 @@ function localProductResultFromDb(cache, params = {}) {
   }
 
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  const totalRow = db.prepare(`SELECT COUNT(*) AS total FROM product_rows ${whereSql}`).get(bindings);
-  const total = Number(totalRow ? totalRow.total : 0);
-  const offset = (page - 1) * pageSize;
-  const rows = db.prepare(`
-    SELECT
-      id,
-      parent_id AS parentId,
-      type,
-      name,
-      sku,
-      image_url AS imageUrl,
-      image_alt AS imageAlt,
-      image_local_path AS imageLocalPath,
-      image_status AS imageStatus,
-      image_downloaded_at AS imageDownloadedAt,
-      regular_price AS regularPrice,
-      sale_price AS salePrice,
-      stock_quantity AS stockQuantity,
-      stock_status AS stockStatus,
-      manage_stock AS manageStock,
-      permalink,
-      modified_at AS modifiedAt,
-      cache_page AS cachePage,
-      search_index AS searchIndex,
-      attributes_json AS attributesJson
-    FROM product_rows
-    ${whereSql}
-    ORDER BY COALESCE(cache_page, 999999), name COLLATE NOCASE, id
-    LIMIT @limit OFFSET @offset
-  `).all({ ...bindings, limit: pageSize, offset }).map(deserializeCacheRow);
+  let totalRow = null;
+  let rows = [];
+  try {
+    totalRow = db.prepare(`SELECT COUNT(*) AS total ${fromSql} ${whereSql}`).get(bindings);
+    const total = Number(totalRow ? totalRow.total : 0);
+    const offset = (page - 1) * pageSize;
+    rows = db.prepare(`
+      SELECT
+        id,
+        parent_id AS parentId,
+        type,
+        name,
+        sku,
+        image_url AS imageUrl,
+        image_alt AS imageAlt,
+        image_local_path AS imageLocalPath,
+        image_status AS imageStatus,
+        image_downloaded_at AS imageDownloadedAt,
+        regular_price AS regularPrice,
+        sale_price AS salePrice,
+        stock_quantity AS stockQuantity,
+        stock_status AS stockStatus,
+        manage_stock AS manageStock,
+        permalink,
+        modified_at AS modifiedAt,
+        cache_page AS cachePage,
+        search_index AS searchIndex,
+        attributes_json AS attributesJson
+      ${fromSql}
+      ${whereSql}
+      ${orderSql}
+      LIMIT @limit OFFSET @offset
+    `).all({ ...bindings, limit: pageSize, offset }).map(deserializeCacheRow);
 
-  addDiagnostic("sqlite", `${hasFilters ? "Query filtri" : "Query pagina"} ${page}: ${rows.length}/${total} righe in ${Date.now() - startedAt}ms.`);
-  return {
-    rows,
-    total,
-    totalPages: Math.max(Math.ceil(total / pageSize), 1),
-    page,
-    source: hasFilters ? "local-filter" : "cache",
-    hasFilters
-  };
+    addDiagnostic(useFts ? "fts" : "sqlite", `${useFts ? "FTS query" : (hasFilters ? "Query filtri" : "Query pagina")} ${page}: ${rows.length}/${total} righe in ${Date.now() - startedAt}ms.`);
+    return {
+      rows,
+      total,
+      totalPages: Math.max(Math.ceil(total / pageSize), 1),
+      page,
+      source: hasFilters ? "local-filter" : "cache",
+      hasFilters
+    };
+  } catch (error) {
+    if (useFts) {
+      addDiagnostic("fts", `FTS fallback LIKE: ${error.message}`);
+      const fallbackParams = { ...params, disableFts: true };
+      const previous = ftsAvailable;
+      ftsAvailable = false;
+      try {
+        return localProductResultFromDb(cache, fallbackParams);
+      } finally {
+        ftsAvailable = previous;
+      }
+    }
+    throw error;
+  }
 }
 
 function rowKey(row) {
