@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("magazzino", {
   testConnection: () => ipcRenderer.invoke("woo:test"),
   getAttributeFilters: () => ipcRenderer.invoke("attributes:filters"),
   listProducts: (params) => ipcRenderer.invoke("products:list", params),
+  preloadProductPage: (params) => ipcRenderer.invoke("products:preload-page", params),
   updateProduct: (row, previousRow) => ipcRenderer.invoke("products:update", row, previousRow),
   updateProducts: (rows) => ipcRenderer.invoke("products:bulk-update", rows),
   getUpdateState: () => ipcRenderer.invoke("updates:state"),

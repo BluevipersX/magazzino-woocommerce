@@ -71,6 +71,7 @@ const els = {
   nextButton: document.querySelector("#nextButton"),
   next5Button: document.querySelector("#next5Button"),
   lastButton: document.querySelector("#lastButton"),
+  pageInput: document.querySelector("#pageInput"),
   pageText: document.querySelector("#pageText"),
   bulkBar: document.querySelector("#bulkBar"),
   bulkCount: document.querySelector("#bulkCount"),
@@ -163,7 +164,7 @@ async function refreshCacheInfo() {
   const info = await window.magazzino.getCacheInfo();
   const pages = info.cachedPages && info.cachedPages.length ? info.cachedPages.join(", ") : "nessuna";
   const updatedAt = info.updatedAt ? new Date(info.updatedAt).toLocaleString("it-IT") : "mai";
-  els.cacheInfoText.textContent = `Pagine: ${pages}. Righe: ${info.rows}. Totale sito: ${info.total || "-"}. Ultimo update: ${updatedAt}. File: ${info.exists ? formatBytes(info.size) : "non presente"} - ${info.path}`;
+  els.cacheInfoText.textContent = `Tipo: ${info.type || "Cache"}. Pagine: ${pages}. Righe: ${info.rows}. Totale sito: ${info.total || "-"}. Ultimo update: ${updatedAt}. File: ${info.exists ? formatBytes(info.size) : "non presente"} - ${info.path}`;
 }
 
 async function openDiagnostics() {
@@ -340,6 +341,8 @@ function validateRow(row) {
 
 function renderRows() {
   els.pageText.textContent = `Pagina ${state.page} di ${Math.max(state.totalPages, 1)}`;
+  els.pageInput.max = Math.max(state.totalPages, 1);
+  if (document.activeElement !== els.pageInput) els.pageInput.value = state.page;
   els.firstButton.disabled = state.loading || state.savingBulk || state.page <= 1;
   els.prev5Button.disabled = state.loading || state.savingBulk || state.page <= 1;
   els.prevButton.disabled = state.loading || state.savingBulk || state.page <= 1;
@@ -483,22 +486,45 @@ async function saveConfig() {
 
 async function loadProducts(page = state.page) {
   const requestId = ++state.requestId;
-  setLoading(true);
   const hasFilters = Boolean(els.searchInput.value || els.setFilter.value || els.languageFilter.value || els.stockFilter.value);
-  setStatus(hasFilters ? "Filtro prodotti in corso..." : "Caricamento prodotti...");
+  const params = {
+    page,
+    search: els.searchInput.value,
+    setTerm: els.setFilter.value,
+    languageTerm: els.languageFilter.value,
+    stockStatus: els.stockFilter.value
+  };
+
+  setLoading(true);
+  setStatus(hasFilters ? "Cerco nella cache locale..." : "Caricamento prodotti...");
   try {
-    const result = await window.magazzino.listProducts({
-      page,
-      search: els.searchInput.value,
-      setTerm: els.setFilter.value,
-      languageTerm: els.languageFilter.value,
-      stockStatus: els.stockFilter.value
-    });
+    const localResult = await window.magazzino.listProducts({ ...params, localOnly: true });
     if (requestId !== state.requestId) return;
-    state.rows = result.rows;
-    state.page = result.page;
-    state.totalPages = result.totalPages;
+
+    if (localResult.source === "cache" || (hasFilters && localResult.rows.length)) {
+      state.rows = localResult.rows;
+      state.page = localResult.page;
+      state.totalPages = localResult.totalPages;
+      setStatus(hasFilters
+        ? `${localResult.rows.length} risultati locali. Aggiorno da WooCommerce...`
+        : `${localResult.rows.length} prodotti caricati dalla cache. Totale: ${localResult.total}.`);
+      setLoading(false);
+      renderRows();
+
+      if (hasFilters) {
+        refreshRemoteResults(requestId, params);
+      } else {
+        preloadNeighborPages(localResult.page, localResult.totalPages);
+      }
+      return;
+    }
+
+    setStatus(hasFilters ? "Cerco prodotti su WooCommerce..." : "Caricamento pagina da WooCommerce...");
+    const result = await window.magazzino.listProducts(params);
+    if (requestId !== state.requestId) return;
+    applyProductResult(result);
     setStatus(`${result.rows.length} prodotti caricati. Totale: ${result.total}.`);
+    if (!hasFilters) preloadNeighborPages(result.page, result.totalPages);
   } catch (error) {
     if (requestId !== state.requestId) return;
     state.rows = [];
@@ -586,6 +612,33 @@ async function saveGridCard(button) {
     setLoading(false);
     renderRows();
   }
+}
+
+function applyProductResult(result) {
+  state.rows = result.rows || [];
+  state.page = result.page || 1;
+  state.totalPages = result.totalPages || 1;
+}
+
+async function refreshRemoteResults(requestId, params) {
+  try {
+    const result = await window.magazzino.listProducts({ ...params, forceRemote: true, silent: true });
+    if (requestId !== state.requestId) return;
+    applyProductResult(result);
+    setStatus(`${result.rows.length} prodotti aggiornati da WooCommerce. Totale: ${result.total}.`, "ok");
+  } catch (error) {
+    if (requestId !== state.requestId) return;
+    setStatus(`Risultati da cache. WooCommerce non risponde: ${error.message || "errore remoto"}`, "error");
+  } finally {
+    if (requestId === state.requestId) renderRows();
+  }
+}
+
+function preloadNeighborPages(page, totalPages) {
+  const pages = [page - 1, page + 1].filter((value) => value >= 1 && value <= totalPages);
+  pages.forEach((targetPage) => {
+    window.magazzino.preloadProductPage({ page: targetPage }).catch(() => {});
+  });
 }
 
 async function saveAllChanges() {
@@ -801,6 +854,14 @@ els.prevButton.addEventListener("click", () => loadProducts(state.page - 1));
 els.nextButton.addEventListener("click", () => loadProducts(state.page + 1));
 els.next5Button.addEventListener("click", () => goToPage(state.page + 5));
 els.lastButton.addEventListener("click", () => goToPage(state.totalPages));
+els.pageInput.addEventListener("change", () => goToPage(els.pageInput.value));
+els.pageInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    goToPage(els.pageInput.value);
+    els.pageInput.blur();
+  }
+});
 els.stockFilter.addEventListener("change", () => loadProducts(1));
 els.setFilter.addEventListener("change", () => loadProducts(1));
 els.languageFilter.addEventListener("change", () => loadProducts(1));
