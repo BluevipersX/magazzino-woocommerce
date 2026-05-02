@@ -7,8 +7,8 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "dist": "electron-builder --win nsis",
-    "dist:dir": "electron-builder --win nsis --dir",
+    "dist": "electron-builder --win nsis --publish never",
+    "dist:dir": "electron-builder --win nsis --dir --publish never",
     "release": "electron-builder --win nsis --publish always"
   },
   "repository": {
