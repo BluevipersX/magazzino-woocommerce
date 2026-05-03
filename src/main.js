@@ -523,7 +523,6 @@ function getProductDb() {
     CREATE INDEX IF NOT EXISTS idx_product_rows_cache_page ON product_rows(cache_page);
     CREATE INDEX IF NOT EXISTS idx_product_rows_stock_status ON product_rows(stock_status);
     CREATE INDEX IF NOT EXISTS idx_product_rows_modified_at ON product_rows(modified_at);
-    CREATE INDEX IF NOT EXISTS idx_product_rows_created_at ON product_rows(created_at);
     CREATE INDEX IF NOT EXISTS idx_product_rows_search_index ON product_rows(search_index);
     CREATE INDEX IF NOT EXISTS idx_product_rows_set_terms ON product_rows(set_terms);
     CREATE INDEX IF NOT EXISTS idx_product_rows_language_terms ON product_rows(language_terms);
