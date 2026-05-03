@@ -340,7 +340,7 @@ function requestImportPassword() {
       resolve(allowed);
     };
     const onConfirm = () => {
-      if (els.importPasswordInput.value === "MisterDitto19@") {
+      if (els.importPasswordInput.value === "KOT-9qR4!vT7#Lm2") {
         done(true);
         return;
       }
