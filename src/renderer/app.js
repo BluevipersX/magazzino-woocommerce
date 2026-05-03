@@ -567,6 +567,9 @@ async function loadProducts(page = state.page) {
 
       if (hasFilters) {
         refreshRemoteResults(requestId, params);
+      } else if (localResult.page === 1) {
+        refreshRemoteResults(requestId, params);
+        preloadNeighborPages(localResult.page, localResult.totalPages);
       } else {
         preloadNeighborPages(localResult.page, localResult.totalPages);
       }

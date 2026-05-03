@@ -39,6 +39,7 @@ const productFields = [
   "name",
   "sku",
   "images",
+  "date_created_gmt",
   "regular_price",
   "sale_price",
   "stock_quantity",
@@ -52,6 +53,7 @@ const variationFields = [
   "id",
   "sku",
   "image",
+  "date_created_gmt",
   "regular_price",
   "sale_price",
   "stock_quantity",
@@ -423,6 +425,7 @@ function serializeCacheRow(row = {}) {
     imageLocalPath: String(row.imageLocalPath || ""),
     imageStatus: String(row.imageStatus || ""),
     imageDownloadedAt: String(row.imageDownloadedAt || ""),
+    createdAt: String(row.createdAt || ""),
     regularPrice: String(row.regularPrice ?? ""),
     salePrice: String(row.salePrice ?? ""),
     stockQuantity: String(row.stockQuantity ?? ""),
@@ -460,6 +463,7 @@ function deserializeCacheRow(row = {}) {
     cachedImageUrl: imageLocalPath && imageStatus === "ok" ? pathToFileURL(imageLocalPath).toString() : "",
     imageStatus,
     imageDownloadedAt: row.imageDownloadedAt || "",
+    createdAt: row.createdAt || "",
     regularPrice: row.regularPrice || "",
     salePrice: row.salePrice || "",
     stockQuantity: row.stockQuantity || "",
@@ -498,6 +502,7 @@ function getProductDb() {
       image_local_path TEXT,
       image_status TEXT,
       image_downloaded_at TEXT,
+      created_at TEXT,
       regular_price TEXT,
       sale_price TEXT,
       stock_quantity TEXT,
@@ -518,6 +523,7 @@ function getProductDb() {
     CREATE INDEX IF NOT EXISTS idx_product_rows_cache_page ON product_rows(cache_page);
     CREATE INDEX IF NOT EXISTS idx_product_rows_stock_status ON product_rows(stock_status);
     CREATE INDEX IF NOT EXISTS idx_product_rows_modified_at ON product_rows(modified_at);
+    CREATE INDEX IF NOT EXISTS idx_product_rows_created_at ON product_rows(created_at);
     CREATE INDEX IF NOT EXISTS idx_product_rows_search_index ON product_rows(search_index);
     CREATE INDEX IF NOT EXISTS idx_product_rows_set_terms ON product_rows(set_terms);
     CREATE INDEX IF NOT EXISTS idx_product_rows_language_terms ON product_rows(language_terms);
@@ -525,7 +531,9 @@ function getProductDb() {
   ensureProductRowColumn(productDb, "image_local_path", "TEXT");
   ensureProductRowColumn(productDb, "image_status", "TEXT");
   ensureProductRowColumn(productDb, "image_downloaded_at", "TEXT");
+  ensureProductRowColumn(productDb, "created_at", "TEXT");
   productDb.prepare("CREATE INDEX IF NOT EXISTS idx_product_rows_image_status ON product_rows(image_status)").run();
+  productDb.prepare("CREATE INDEX IF NOT EXISTS idx_product_rows_created_at ON product_rows(created_at)").run();
   setupFts(productDb);
   return productDb;
 }
@@ -627,6 +635,7 @@ function rowsFromDb(db) {
       image_local_path AS imageLocalPath,
       image_status AS imageStatus,
       image_downloaded_at AS imageDownloadedAt,
+      created_at AS createdAt,
       regular_price AS regularPrice,
       sale_price AS salePrice,
       stock_quantity AS stockQuantity,
@@ -638,7 +647,7 @@ function rowsFromDb(db) {
       search_index AS searchIndex,
       attributes_json AS attributesJson
     FROM product_rows
-    ORDER BY COALESCE(cache_page, 999999), name COLLATE NOCASE, id
+    ORDER BY COALESCE(created_at, modified_at, '') DESC, id DESC
   `).all().map(deserializeCacheRow);
 }
 
@@ -676,11 +685,11 @@ function writeCacheToDb(cache) {
   const insertRow = db.prepare(`
     INSERT OR REPLACE INTO product_rows (
       row_key, id, parent_id, type, name, sku, image_url, image_alt, image_local_path, image_status, image_downloaded_at,
-      regular_price, sale_price, stock_quantity, stock_status, manage_stock,
+      created_at, regular_price, sale_price, stock_quantity, stock_status, manage_stock,
       permalink, modified_at, cache_page, search_index, set_terms, language_terms, attributes_json
     ) VALUES (
       @rowKey, @id, @parentId, @type, @name, @sku, @imageUrl, @imageAlt, @imageLocalPath, @imageStatus, @imageDownloadedAt,
-      @regularPrice, @salePrice, @stockQuantity, @stockStatus, @manageStock,
+      @createdAt, @regularPrice, @salePrice, @stockQuantity, @stockStatus, @manageStock,
       @permalink, @modifiedAt, @cachePage, @searchIndex, @setTerms, @languageTerms, @attributesJson
     )
   `);
@@ -1445,6 +1454,7 @@ function productRow(product, variation = null) {
     sku,
     imageUrl: image && image.src ? image.src : "",
     imageAlt: image && image.alt ? image.alt : name,
+    createdAt: item.date_created_gmt || product.date_created_gmt || "",
     regularPrice: item.regular_price || "",
     salePrice: item.sale_price || "",
     stockQuantity,
@@ -1571,6 +1581,7 @@ function localProductResult(cache, params = {}) {
   const setTerm = String(params.setTerm || "").trim();
   const languageTerm = String(params.languageTerm || "").trim();
   const hasFilters = Boolean(search || stockStatus || setTerm || languageTerm);
+  const hasCachedPage = !hasFilters && (cache.cachedPages || []).includes(page);
   const rows = cache.rows || [];
 
   if (hasFilters) {
@@ -1625,7 +1636,7 @@ function localProductResultFromDb(cache, params = {}) {
   const useFts = Boolean(search && ftsAvailable);
   let ftsSql = "";
   let fromSql = "FROM product_rows";
-  let orderSql = "ORDER BY COALESCE(cache_page, 999999), name COLLATE NOCASE, id";
+  let orderSql = "ORDER BY COALESCE(created_at, modified_at, '') DESC, id DESC";
 
   if (hasFilters) {
     if (search) {
@@ -1634,7 +1645,7 @@ function localProductResultFromDb(cache, params = {}) {
         fromSql = "FROM product_rows JOIN product_rows_fts ON product_rows_fts.row_key = product_rows.row_key";
         where.push("product_rows_fts MATCH @ftsQuery");
         bindings.ftsQuery = ftsSql;
-        orderSql = "ORDER BY bm25(product_rows_fts), COALESCE(cache_page, 999999), name COLLATE NOCASE, id";
+        orderSql = "ORDER BY bm25(product_rows_fts), COALESCE(created_at, modified_at, '') DESC, id DESC";
       } else {
         search.split(" ").forEach((token, index) => {
           where.push(`search_index LIKE @search${index} ESCAPE '\\'`);
@@ -1654,7 +1665,7 @@ function localProductResultFromDb(cache, params = {}) {
       where.push("language_terms LIKE @languageTerm ESCAPE '\\'");
       bindings.languageTerm = buildSqlLike(languageTerm);
     }
-  } else if ((cache.cachedPages || []).includes(page)) {
+  } else if (hasCachedPage) {
     where.push("cache_page = @cachePage");
     bindings.cachePage = page;
   } else {
@@ -1674,8 +1685,8 @@ function localProductResultFromDb(cache, params = {}) {
   let rows = [];
   try {
     totalRow = db.prepare(`SELECT COUNT(*) AS total ${fromSql} ${whereSql}`).get(bindings);
-    const total = Number(totalRow ? totalRow.total : 0);
-    const offset = (page - 1) * pageSize;
+    const total = hasCachedPage ? Number(cache.total || (totalRow ? totalRow.total : 0)) : Number(totalRow ? totalRow.total : 0);
+    const offset = hasCachedPage ? 0 : (page - 1) * pageSize;
     rows = db.prepare(`
       SELECT
         id,
@@ -1688,6 +1699,7 @@ function localProductResultFromDb(cache, params = {}) {
         image_local_path AS imageLocalPath,
         image_status AS imageStatus,
         image_downloaded_at AS imageDownloadedAt,
+        created_at AS createdAt,
         regular_price AS regularPrice,
         sale_price AS salePrice,
         stock_quantity AS stockQuantity,
@@ -1872,6 +1884,8 @@ async function fetchProductRowsPage(page, params = {}) {
     page,
     per_page: 100,
     status: "publish",
+    orderby: "date",
+    order: "desc",
     _fields: productFields,
     ...filters.query
   };
@@ -1894,7 +1908,7 @@ async function fetchProductRowsPage(page, params = {}) {
   const pageRows = await mapLimit(result.data || [], 3, async (product) => {
     if (product.type === "variable") {
       const variations = await wooRequest(`products/${product.id}/variations`, {
-        query: { per_page: 100, _fields: variationFields }
+        query: { per_page: 100, orderby: "date", order: "desc", _fields: variationFields }
       });
       return {
         rows: (variations.data || []).map((variation) => productRow(product, variation)),
@@ -1948,7 +1962,7 @@ async function fetchModifiedRows(modifiedAfter) {
     const pageRows = await mapLimit(result.data || [], 3, async (product) => {
       if (product.type === "variable") {
         const variations = await wooRequest(`products/${product.id}/variations`, {
-          query: { per_page: 100, _fields: variationFields }
+          query: { per_page: 100, orderby: "date", order: "desc", _fields: variationFields }
         });
         return {
           rows: (variations.data || []).map((variation) => productRow(product, variation)),
@@ -2198,7 +2212,10 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
     productCacheStats.downloadedBytes += pageRows.bytes || 0;
     const config = await readConfig();
     const fullCache = await readProductCache();
-    const nextRows = mergeRows(fullCache.rows || [], pageRows.rows);
+    const rowsBeforeMerge = hasFilters
+      ? (fullCache.rows || [])
+      : (fullCache.rows || []).filter((row) => row.cachePage !== page);
+    const nextRows = mergeRows(rowsBeforeMerge, pageRows.rows);
     const nextCache = {
       storeUrl: config.storeUrl,
       complete: false,
@@ -2284,7 +2301,7 @@ ipcMain.handle("products:preload-page", async (_event, params = {}) => {
         Math.max(Number(fullCache.processedProducts || cache.processedProducts || 0), page * 100),
         pageRows.total || page * 100
       ),
-      rows: mergeRows(fullCache.rows || [], pageRows.rows),
+      rows: mergeRows((fullCache.rows || []).filter((row) => row.cachePage !== page), pageRows.rows),
       cachedPages: Array.from(new Set([...(fullCache.cachedPages || cache.cachedPages || []), page])).sort((a, b) => a - b),
       updatedAt: new Date().toISOString()
     };
