@@ -19,6 +19,8 @@ const els = {
   menuRefreshButton: document.querySelector("#menuRefreshButton"),
   menuQuitButton: document.querySelector("#menuQuitButton"),
   menuUpdateButton: document.querySelector("#menuUpdateButton"),
+  menuExportCsvButton: document.querySelector("#menuExportCsvButton"),
+  menuImportCsvButton: document.querySelector("#menuImportCsvButton"),
   listViewButton: document.querySelector("#listViewButton"),
   gridViewButton: document.querySelector("#gridViewButton"),
   inlineListViewButton: document.querySelector("#inlineListViewButton"),
@@ -64,12 +66,15 @@ const els = {
   importCsvErrors: document.querySelector("#importCsvErrors"),
   copyImportCsvButton: document.querySelector("#copyImportCsvButton"),
   closeImportCsvButton: document.querySelector("#closeImportCsvButton"),
+  importPasswordModal: document.querySelector("#importPasswordModal"),
+  importPasswordInput: document.querySelector("#importPasswordInput"),
+  importPasswordError: document.querySelector("#importPasswordError"),
+  confirmImportPasswordButton: document.querySelector("#confirmImportPasswordButton"),
+  cancelImportPasswordButton: document.querySelector("#cancelImportPasswordButton"),
   searchInput: document.querySelector("#searchInput"),
   setFilter: document.querySelector("#setFilter"),
   languageFilter: document.querySelector("#languageFilter"),
   stockFilter: document.querySelector("#stockFilter"),
-  exportCsvButton: document.querySelector("#exportCsvButton"),
-  importCsvButton: document.querySelector("#importCsvButton"),
   refreshButton: document.querySelector("#refreshButton"),
   updateButton: document.querySelector("#updateButton"),
   updateText: document.querySelector("#updateText"),
@@ -317,6 +322,53 @@ function closeImportCsv() {
   els.importCsvModal.setAttribute("aria-hidden", "true");
 }
 
+function requestImportPassword() {
+  els.importPasswordInput.value = "";
+  els.importPasswordError.hidden = true;
+  els.importPasswordModal.classList.add("open");
+  els.importPasswordModal.setAttribute("aria-hidden", "false");
+  setTimeout(() => els.importPasswordInput.focus(), 0);
+
+  return new Promise((resolve) => {
+    const done = (allowed) => {
+      els.importPasswordModal.classList.remove("open");
+      els.importPasswordModal.setAttribute("aria-hidden", "true");
+      els.confirmImportPasswordButton.removeEventListener("click", onConfirm);
+      els.cancelImportPasswordButton.removeEventListener("click", onCancel);
+      els.importPasswordModal.removeEventListener("click", onOverlay);
+      els.importPasswordInput.removeEventListener("keydown", onKeydown);
+      resolve(allowed);
+    };
+    const onConfirm = () => {
+      if (els.importPasswordInput.value === "MisterDitto19@") {
+        done(true);
+        return;
+      }
+      els.importPasswordError.hidden = false;
+      els.importPasswordInput.select();
+    };
+    const onCancel = () => done(false);
+    const onOverlay = (event) => {
+      if (event.target === els.importPasswordModal) done(false);
+    };
+    const onKeydown = (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        onConfirm();
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        done(false);
+      }
+    };
+
+    els.confirmImportPasswordButton.addEventListener("click", onConfirm);
+    els.cancelImportPasswordButton.addEventListener("click", onCancel);
+    els.importPasswordModal.addEventListener("click", onOverlay);
+    els.importPasswordInput.addEventListener("keydown", onKeydown);
+  });
+}
+
 function renderChangeSummary(rows) {
   return rows.map((row) => {
     const changes = changeList(row);
@@ -365,8 +417,8 @@ function updateBulkControls() {
   els.bulkCount.textContent = count === 1 ? "1 modifica da salvare" : `${count} modifiche da salvare`;
   els.saveAllButton.disabled = state.loading || state.cacheSyncing || state.savingBulk || count === 0;
   els.discardAllButton.disabled = state.loading || state.savingBulk || count === 0;
-  els.exportCsvButton.disabled = state.loading || state.savingBulk || !state.rows.length;
-  els.importCsvButton.disabled = state.loading || state.cacheSyncing || state.savingBulk;
+  els.menuExportCsvButton.disabled = state.loading || state.savingBulk || !state.rows.length;
+  els.menuImportCsvButton.disabled = state.loading || state.cacheSyncing || state.savingBulk;
 }
 
 function setDirtyRow(index, values) {
@@ -793,6 +845,11 @@ async function exportCsv() {
 
 async function importCsv() {
   try {
+    const allowed = await requestImportPassword();
+    if (!allowed) {
+      setStatus("Import CSV annullato.");
+      return;
+    }
     setStatus("Leggo CSV...");
     const result = await window.magazzino.importCsv();
     if (result.canceled) {
@@ -942,6 +999,10 @@ document.addEventListener("keydown", (event) => {
     closeImportCsv();
     return;
   }
+  if (event.key === "Escape" && els.importPasswordModal.classList.contains("open")) {
+    els.cancelImportPasswordButton.click();
+    return;
+  }
   if (event.key === "Escape" && els.configModal.classList.contains("open")) {
     closeSettings();
     return;
@@ -953,8 +1014,8 @@ document.addEventListener("keydown", (event) => {
 
 els.refreshButton.addEventListener("click", () => loadProducts(1));
 els.menuRefreshButton.addEventListener("click", () => loadProducts(1));
-els.exportCsvButton.addEventListener("click", exportCsv);
-els.importCsvButton.addEventListener("click", importCsv);
+els.menuExportCsvButton.addEventListener("click", exportCsv);
+els.menuImportCsvButton.addEventListener("click", importCsv);
 els.closeImportCsvButton.addEventListener("click", closeImportCsv);
 els.copyImportCsvButton.addEventListener("click", async () => {
   const text = [

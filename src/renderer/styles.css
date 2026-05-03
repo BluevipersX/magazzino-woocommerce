@@ -335,9 +335,9 @@ main {
 
 .filters {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) 112px 124px 128px 106px 106px 94px 118px;
+  grid-template-columns: minmax(190px, 1fr) 130px 130px 142px 104px 126px;
   gap: 10px;
-  width: min(1120px, 100%);
+  width: min(1020px, 100%);
 }
 
 .statusbar {
@@ -850,6 +850,14 @@ tr.dirty td:first-child {
 
 .confirmDialog {
   width: min(680px, 100%);
+}
+
+.passwordDialog {
+  width: min(420px, 100%);
+}
+
+.errorText {
+  color: var(--color-error);
 }
 
 .changeSummary {
