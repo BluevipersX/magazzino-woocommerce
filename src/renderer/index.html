@@ -66,6 +66,8 @@
               <option value="outofstock">Esauriti</option>
               <option value="onbackorder">In arretrato</option>
             </select>
+            <button id="exportCsvButton" class="secondary" type="button">Esporta CSV</button>
+            <button id="importCsvButton" class="secondary" type="button">Importa CSV</button>
             <button id="refreshButton" type="button">Aggiorna</button>
             <button id="settingsButton" class="secondary" type="button">Impostazioni</button>
           </div>
@@ -238,6 +240,21 @@
         <div class="buttonRow">
           <button id="confirmSaveButton" type="button">Conferma salvataggio</button>
           <button id="cancelSaveButton" class="secondary" type="button">Annulla</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="importCsvModal" class="modalOverlay" aria-hidden="true">
+      <section class="settingsDialog diagnosticsDialog">
+        <div>
+          <p class="eyebrow">Import CSV</p>
+          <h3>Riepilogo modifiche</h3>
+        </div>
+        <div id="importCsvSummary" class="changeSummary"></div>
+        <textarea id="importCsvErrors" readonly spellcheck="false" hidden></textarea>
+        <div class="buttonRow">
+          <button id="copyImportCsvButton" class="secondary" type="button">Copia riepilogo</button>
+          <button id="closeImportCsvButton" type="button">Chiudi</button>
         </div>
       </section>
     </div>

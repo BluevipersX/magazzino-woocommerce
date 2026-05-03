@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld("magazzino", {
   getDiagnostics: () => ipcRenderer.invoke("diagnostics:get"),
   getHistory: () => ipcRenderer.invoke("history:get"),
   clearHistory: () => ipcRenderer.invoke("history:clear"),
+  exportCsv: (rows) => ipcRenderer.invoke("csv:export", rows),
+  importCsv: () => ipcRenderer.invoke("csv:import"),
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggle-maximize"),
   closeWindow: () => ipcRenderer.invoke("window:close"),

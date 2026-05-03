@@ -59,10 +59,17 @@ const els = {
   confirmSaveSummary: document.querySelector("#confirmSaveSummary"),
   confirmSaveButton: document.querySelector("#confirmSaveButton"),
   cancelSaveButton: document.querySelector("#cancelSaveButton"),
+  importCsvModal: document.querySelector("#importCsvModal"),
+  importCsvSummary: document.querySelector("#importCsvSummary"),
+  importCsvErrors: document.querySelector("#importCsvErrors"),
+  copyImportCsvButton: document.querySelector("#copyImportCsvButton"),
+  closeImportCsvButton: document.querySelector("#closeImportCsvButton"),
   searchInput: document.querySelector("#searchInput"),
   setFilter: document.querySelector("#setFilter"),
   languageFilter: document.querySelector("#languageFilter"),
   stockFilter: document.querySelector("#stockFilter"),
+  exportCsvButton: document.querySelector("#exportCsvButton"),
+  importCsvButton: document.querySelector("#importCsvButton"),
   refreshButton: document.querySelector("#refreshButton"),
   updateButton: document.querySelector("#updateButton"),
   updateText: document.querySelector("#updateText"),
@@ -260,7 +267,7 @@ function rowHasChanges(row, values) {
 }
 
 function changeList(row) {
-  const original = state.rows.find((current) => rowKey(current) === rowKey(row)) || row;
+  const original = state.rows.find((current) => rowKey(current) === rowKey(row)) || row.importedBefore || row;
   const fields = [
     ["regularPrice", "Prezzo"],
     ["salePrice", "Sconto"],
@@ -269,6 +276,45 @@ function changeList(row) {
   return fields
     .filter(([field]) => moneyValue(original[field]).trim() !== moneyValue(row[field]).trim())
     .map(([field, label]) => `${label}: ${moneyValue(original[field]).trim() || "-"} -> ${moneyValue(row[field]).trim() || "-"}`);
+}
+
+function renderImportSummary(result) {
+  const errors = result.errors || [];
+  const errorText = errors.map((error) => {
+    const product = [
+      error.id ? `ID ${error.id}` : "",
+      error.parentId ? `padre ${error.parentId}` : "",
+      error.sku ? `SKU ${error.sku}` : ""
+    ].filter(Boolean).join(", ") || "riga senza ID/SKU";
+    return `Riga ${error.line}: ${product} - ${error.message}`;
+  }).join("\n");
+
+  els.importCsvSummary.innerHTML = `
+    <div class="changeItem">
+      <strong>${escapeHtml(result.changed || 0)} modifiche pronte</strong>
+      <span>${escapeHtml(result.rowsRead || 0)} righe lette, ${escapeHtml(result.matched || 0)} abbinate</span>
+      <small>${escapeHtml(result.unchanged || 0)} invariate, ${escapeHtml(result.ignored || 0)} ignorate</small>
+    </div>
+    ${
+      result.filePath
+        ? `<div class="changeItem"><strong>File</strong><small>${escapeHtml(result.filePath)}</small></div>`
+        : ""
+    }
+    ${
+      errors.length
+        ? `<div class="changeItem"><strong>Errori import</strong><small>${escapeHtml(errors.slice(0, 8).map((error) => `Riga ${error.line}: ${error.message}`).join("; "))}${errors.length > 8 ? " ..." : ""}</small></div>`
+        : ""
+    }
+  `;
+  els.importCsvErrors.hidden = !errorText;
+  els.importCsvErrors.value = errorText;
+  els.importCsvModal.classList.add("open");
+  els.importCsvModal.setAttribute("aria-hidden", "false");
+}
+
+function closeImportCsv() {
+  els.importCsvModal.classList.remove("open");
+  els.importCsvModal.setAttribute("aria-hidden", "true");
 }
 
 function renderChangeSummary(rows) {
@@ -319,6 +365,8 @@ function updateBulkControls() {
   els.bulkCount.textContent = count === 1 ? "1 modifica da salvare" : `${count} modifiche da salvare`;
   els.saveAllButton.disabled = state.loading || state.cacheSyncing || state.savingBulk || count === 0;
   els.discardAllButton.disabled = state.loading || state.savingBulk || count === 0;
+  els.exportCsvButton.disabled = state.loading || state.savingBulk || !state.rows.length;
+  els.importCsvButton.disabled = state.loading || state.cacheSyncing || state.savingBulk;
 }
 
 function setDirtyRow(index, values) {
@@ -681,7 +729,7 @@ async function saveAllChanges() {
       const row = rows[index];
       setStatus(`Salvo ${index + 1}/${rows.length}: ${row.name}`);
       try {
-        const previousRow = state.rows.find((current) => rowKey(current) === rowKey(row)) || row;
+        const previousRow = state.rows.find((current) => rowKey(current) === rowKey(row)) || row.importedBefore || row;
         await window.magazzino.updateProduct(row, previousRow);
         saved += 1;
       } catch (error) {
@@ -712,6 +760,59 @@ function discardAllChanges() {
   state.dirtyRows.clear();
   setStatus("Modifiche annullate.");
   renderRows();
+}
+
+async function exportCsv() {
+  if (!state.rows.length) {
+    setStatus("Nessun prodotto da esportare.", "error");
+    return;
+  }
+
+  try {
+    setStatus("Preparo export CSV...");
+    const rows = state.rows.map((row) => editableRow(row));
+    const result = await window.magazzino.exportCsv(rows);
+    if (result.canceled) {
+      setStatus("Export CSV annullato.");
+      return;
+    }
+    if (!result.saved) {
+      setStatus(result.message || "Nessun prodotto esportato.", "error");
+      return;
+    }
+    setStatus(`${result.rows} prodotti esportati in CSV.`, "ok");
+  } catch (error) {
+    setStatus(error.message || "Export CSV non riuscito.", "error");
+  } finally {
+    updateBulkControls();
+  }
+}
+
+async function importCsv() {
+  try {
+    setStatus("Leggo CSV...");
+    const result = await window.magazzino.importCsv();
+    if (result.canceled) {
+      setStatus("Import CSV annullato.");
+      return;
+    }
+
+    (result.changes || []).forEach((row) => {
+      state.dirtyRows.set(rowKey(row), row);
+    });
+    renderImportSummary(result);
+    renderRows();
+    setStatus(
+      result.changed
+        ? `${result.changed} modifiche importate. Usa Salva tutto per inviarle a WooCommerce.`
+        : "CSV importato: nessuna modifica rilevata.",
+      result.changed ? "ok" : "normal"
+    );
+  } catch (error) {
+    setStatus(error.message || "Import CSV non riuscito.", "error");
+  } finally {
+    updateBulkControls();
+  }
 }
 
 els.configForm.addEventListener("submit", async (event) => {
@@ -834,6 +935,10 @@ document.addEventListener("keydown", (event) => {
     els.cancelSaveButton.click();
     return;
   }
+  if (event.key === "Escape" && els.importCsvModal.classList.contains("open")) {
+    closeImportCsv();
+    return;
+  }
   if (event.key === "Escape" && els.configModal.classList.contains("open")) {
     closeSettings();
     return;
@@ -845,6 +950,20 @@ document.addEventListener("keydown", (event) => {
 
 els.refreshButton.addEventListener("click", () => loadProducts(1));
 els.menuRefreshButton.addEventListener("click", () => loadProducts(1));
+els.exportCsvButton.addEventListener("click", exportCsv);
+els.importCsvButton.addEventListener("click", importCsv);
+els.closeImportCsvButton.addEventListener("click", closeImportCsv);
+els.copyImportCsvButton.addEventListener("click", async () => {
+  const text = [
+    els.importCsvSummary.textContent.trim(),
+    els.importCsvErrors.value.trim()
+  ].filter(Boolean).join("\n\n");
+  await navigator.clipboard.writeText(text);
+  setStatus("Riepilogo import copiato.", "ok");
+});
+els.importCsvModal.addEventListener("click", (event) => {
+  if (event.target === els.importCsvModal) closeImportCsv();
+});
 els.saveAllButton.addEventListener("click", saveAllChanges);
 els.discardAllButton.addEventListener("click", discardAllChanges);
 els.updateButton.addEventListener("click", async () => {

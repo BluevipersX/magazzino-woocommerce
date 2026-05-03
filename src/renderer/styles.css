@@ -335,9 +335,9 @@ main {
 
 .filters {
   display: grid;
-  grid-template-columns: minmax(190px, 1fr) 130px 130px 142px 104px 126px;
+  grid-template-columns: minmax(180px, 1fr) 112px 124px 128px 106px 106px 94px 118px;
   gap: 10px;
-  width: min(1020px, 100%);
+  width: min(1120px, 100%);
 }
 
 .statusbar {
@@ -926,7 +926,8 @@ tr.dirty td:first-child {
 }
 
 #diagnosticsText,
-#historyText {
+#historyText,
+#importCsvErrors {
   width: 100%;
   height: min(460px, 55vh);
   padding: 12px;
@@ -934,6 +935,10 @@ tr.dirty td:first-child {
   font-family: Consolas, "Courier New", monospace;
   font-size: 12px;
   line-height: 1.45;
+}
+
+#importCsvErrors {
+  height: min(180px, 28vh);
 }
 
 @media (max-width: 980px) {

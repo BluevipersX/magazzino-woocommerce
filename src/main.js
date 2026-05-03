@@ -762,6 +762,277 @@ async function writeProductCache(cache) {
   writeCacheToDb(cache);
 }
 
+const csvColumns = [
+  "id",
+  "parentId",
+  "type",
+  "name",
+  "sku",
+  "regularPrice",
+  "salePrice",
+  "stockQuantity",
+  "stockStatus",
+  "set",
+  "language",
+  "permalink"
+];
+
+function csvCell(value) {
+  const text = String(value ?? "");
+  return /[;"\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function csvLine(values) {
+  return values.map(csvCell).join(";");
+}
+
+function rowCsvAttribute(row, keys) {
+  return productRowTerms(row, keys).replace(/\s+/g, " ").trim();
+}
+
+function rowsToCsv(rows = []) {
+  const lines = [csvLine(csvColumns)];
+  rows.forEach((row) => {
+    lines.push(csvLine([
+      row.id,
+      row.parentId || "",
+      row.type || "",
+      row.name || "",
+      row.sku || "",
+      row.regularPrice ?? "",
+      row.salePrice ?? "",
+      row.stockQuantity ?? "",
+      row.stockStatus || "",
+      rowCsvAttribute(row, ["set"]),
+      rowCsvAttribute(row, ["lingua", "language"]),
+      row.permalink || ""
+    ]));
+  });
+  return `\ufeff${lines.join("\r\n")}\r\n`;
+}
+
+function detectCsvSeparator(headerLine) {
+  const semicolons = (headerLine.match(/;/g) || []).length;
+  const commas = (headerLine.match(/,/g) || []).length;
+  return commas > semicolons ? "," : ";";
+}
+
+function parseCsv(text) {
+  const cleanText = String(text || "").replace(/^\ufeff/, "");
+  const separator = detectCsvSeparator(cleanText.split(/\r?\n/, 1)[0] || "");
+  const rows = [];
+  let cell = "";
+  let row = [];
+  let quoted = false;
+
+  for (let index = 0; index < cleanText.length; index += 1) {
+    const char = cleanText[index];
+    const next = cleanText[index + 1];
+
+    if (quoted) {
+      if (char === '"' && next === '"') {
+        cell += '"';
+        index += 1;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        cell += char;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      quoted = true;
+    } else if (char === separator) {
+      row.push(cell);
+      cell = "";
+    } else if (char === "\n") {
+      row.push(cell.replace(/\r$/, ""));
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+
+  if (cell || row.length) {
+    row.push(cell.replace(/\r$/, ""));
+    rows.push(row);
+  }
+
+  const header = (rows.shift() || []).map((value) => value.trim());
+  const records = rows
+    .filter((values) => values.some((value) => String(value || "").trim()))
+    .map((values, index) => ({
+      line: index + 2,
+      data: Object.fromEntries(header.map((key, keyIndex) => [key, values[keyIndex] ?? ""]))
+    }));
+
+  return { header, records, separator };
+}
+
+function normalizeCsvPrice(value, fieldLabel) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return { ok: true, value: "" };
+  if (!/^\d+([,.]\d+)?$/.test(raw)) {
+    return { ok: false, error: `${fieldLabel} non valido` };
+  }
+  return { ok: true, value: raw.replace(",", ".") };
+}
+
+function normalizeCsvQuantity(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return { ok: true, value: "" };
+  if (!/^\d+([,.]0+)?$/.test(raw)) {
+    return { ok: false, error: "Quantita non valida" };
+  }
+  return { ok: true, value: String(Number.parseInt(raw, 10)) };
+}
+
+function csvImportError(line, data, message) {
+  return {
+    line,
+    id: String(data.id || "").trim(),
+    parentId: String(data.parentId || "").trim(),
+    sku: String(data.sku || "").trim(),
+    message
+  };
+}
+
+function changedCsvFields(baseRow, nextRow) {
+  return ["regularPrice", "salePrice", "stockQuantity"].filter(
+    (field) => String(baseRow[field] ?? "").trim() !== String(nextRow[field] ?? "").trim()
+  );
+}
+
+async function exportRowsToCsv(rows = []) {
+  const exportRows = Array.isArray(rows) ? rows : [];
+  if (!exportRows.length) {
+    return { canceled: false, saved: false, message: "Nessun prodotto da esportare." };
+  }
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: "Esporta prodotti CSV",
+    defaultPath: path.join(app.getPath("documents"), `prodotti-magazzino-${stamp}.csv`),
+    filters: [{ name: "CSV", extensions: ["csv"] }]
+  });
+
+  if (result.canceled || !result.filePath) {
+    addDiagnostic("csv", "Export annullato.");
+    return { canceled: true };
+  }
+
+  await fs.writeFile(result.filePath, rowsToCsv(exportRows), "utf8");
+  addDiagnostic("csv", `Export CSV completato: ${exportRows.length} righe.`);
+  return {
+    canceled: false,
+    saved: true,
+    filePath: result.filePath,
+    rows: exportRows.length
+  };
+}
+
+async function importRowsFromCsv() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Importa modifiche CSV",
+    properties: ["openFile"],
+    filters: [{ name: "CSV", extensions: ["csv"] }]
+  });
+
+  if (result.canceled || !result.filePaths || !result.filePaths[0]) {
+    addDiagnostic("csv", "Import annullato.");
+    return { canceled: true };
+  }
+
+  const filePath = result.filePaths[0];
+  const parsed = parseCsv(await fs.readFile(filePath, "utf8"));
+  const requiredHeaders = ["id", "parentId", "sku", "regularPrice", "salePrice", "stockQuantity"];
+  const missingHeaders = requiredHeaders.filter((header) => !parsed.header.includes(header));
+  if (missingHeaders.length) {
+    throw new Error(`CSV non valido: mancano colonne ${missingHeaders.join(", ")}.`);
+  }
+
+  const cache = await readProductCache();
+  const cachedRows = cache.rows || [];
+  const byCompositeId = new Map(cachedRows.map((row) => [rowKey(row), row]));
+  const skuGroups = new Map();
+  cachedRows.forEach((row) => {
+    const sku = String(row.sku || "").trim().toLowerCase();
+    if (!sku) return;
+    skuGroups.set(sku, [...(skuGroups.get(sku) || []), row]);
+  });
+
+  const summary = {
+    canceled: false,
+    filePath,
+    rowsRead: parsed.records.length,
+    matched: 0,
+    changed: 0,
+    unchanged: 0,
+    ignored: 0,
+    errors: [],
+    changes: []
+  };
+
+  parsed.records.forEach(({ line, data }) => {
+    const id = String(data.id || "").trim();
+    const parentId = String(data.parentId || "").trim();
+    const compositeKey = `${parentId || 0}:${id}`;
+    let baseRow = id ? byCompositeId.get(compositeKey) : null;
+
+    if (!baseRow) {
+      const sku = String(data.sku || "").trim().toLowerCase();
+      const skuMatches = sku ? skuGroups.get(sku) || [] : [];
+      if (skuMatches.length === 1) baseRow = skuMatches[0];
+      else if (skuMatches.length > 1) {
+        summary.ignored += 1;
+        summary.errors.push(csvImportError(line, data, "SKU non univoco, usa id e parentId"));
+        return;
+      }
+    }
+
+    if (!baseRow) {
+      summary.ignored += 1;
+      summary.errors.push(csvImportError(line, data, "Prodotto non trovato nella cache locale"));
+      return;
+    }
+
+    const regularPrice = normalizeCsvPrice(data.regularPrice, "Prezzo");
+    const salePrice = normalizeCsvPrice(data.salePrice, "Sconto");
+    const stockQuantity = normalizeCsvQuantity(data.stockQuantity);
+    const invalid = [regularPrice, salePrice, stockQuantity].find((entry) => !entry.ok);
+    if (invalid) {
+      summary.ignored += 1;
+      summary.errors.push(csvImportError(line, data, invalid.error));
+      return;
+    }
+
+    summary.matched += 1;
+    const nextRow = {
+      ...baseRow,
+      regularPrice: regularPrice.value,
+      salePrice: salePrice.value,
+      stockQuantity: stockQuantity.value
+    };
+    const changedFields = changedCsvFields(baseRow, nextRow);
+    if (!changedFields.length) {
+      summary.unchanged += 1;
+      return;
+    }
+
+    summary.changed += 1;
+    summary.changes.push({ ...nextRow, importedFields: changedFields, importedBefore: historyRow(baseRow) });
+  });
+
+  addDiagnostic(
+    "csv",
+    `Import CSV: ${summary.rowsRead} lette, ${summary.matched} abbinate, ${summary.changed} modificate, ${summary.ignored} ignorate.`
+  );
+  return summary;
+}
+
 function historyRow(row = {}) {
   return {
     id: row.id,
@@ -1817,6 +2088,8 @@ ipcMain.handle("cache:refresh-page", async (_event, page) => refreshCachePage(pa
 ipcMain.handle("diagnostics:get", async () => diagnosticLog.map((entry) => `[${entry.time}] ${entry.event}: ${entry.detail}`).join("\n"));
 ipcMain.handle("history:get", async () => (await readChangeHistory()).map(formatHistoryEntry).reverse().join("\n"));
 ipcMain.handle("history:clear", async () => clearChangeHistory());
+ipcMain.handle("csv:export", async (_event, rows = []) => exportRowsToCsv(rows));
+ipcMain.handle("csv:import", async () => importRowsFromCsv());
 ipcMain.handle("window:minimize", () => mainWindow.minimize());
 ipcMain.handle("window:toggle-maximize", () => {
   if (mainWindow.isMaximized()) mainWindow.unmaximize();
