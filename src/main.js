@@ -1631,6 +1631,7 @@ function localProductResultFromDb(cache, params = {}) {
   const setTerm = normalizeSlug(params.setTerm);
   const languageTerm = normalizeSlug(params.languageTerm);
   const hasFilters = Boolean(search || stockStatus || setTerm || languageTerm);
+  const hasCachedPage = !hasFilters && (cache.cachedPages || []).includes(page);
   const where = [];
   const bindings = {};
   const useFts = Boolean(search && ftsAvailable);
