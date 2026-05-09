@@ -5,6 +5,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { pathToFileURL } = require("url");
 const fs = require("fs/promises");
+const fsSync = require("fs");
 
 let mainWindow;
 let startupWindow;
@@ -359,12 +360,61 @@ app.on("activate", () => {
 const configPath = () => path.join(app.getPath("userData"), "config.json");
 const productCachePath = () => path.join(app.getPath("userData"), "products-cache.json");
 const productCacheBackupPath = () => path.join(app.getPath("userData"), "products-cache.json.backup");
-const productCacheDbPath = () => path.join(app.getPath("userData"), "products-cache.sqlite");
-const imageCacheDir = () => path.join(app.getPath("userData"), "image-cache");
 const changeHistoryPath = () => path.join(app.getPath("userData"), "change-history.json");
+let runtimeCacheDir = null;
 let productDb = null;
 const imageDownloads = new Set();
 let ftsAvailable = false;
+
+function canWriteDirectory(targetDir) {
+  try {
+    fsSync.mkdirSync(targetDir, { recursive: true });
+    const probe = path.join(targetDir, `.write-test-${process.pid}`);
+    fsSync.writeFileSync(probe, "ok");
+    fsSync.unlinkSync(probe);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function cacheDataDir() {
+  if (runtimeCacheDir) return runtimeCacheDir;
+  const installBase = app.isPackaged ? path.dirname(process.execPath) : path.dirname(app.getAppPath());
+  const installDataDir = path.join(installBase, "dati");
+  runtimeCacheDir = canWriteDirectory(installDataDir)
+    ? installDataDir
+    : path.join(app.getPath("userData"), "dati");
+  if (!canWriteDirectory(runtimeCacheDir)) {
+    runtimeCacheDir = app.getPath("userData");
+    fsSync.mkdirSync(runtimeCacheDir, { recursive: true });
+  }
+  addDiagnostic("cache", `Cartella cache locale: ${runtimeCacheDir}`);
+  return runtimeCacheDir;
+}
+
+const productCacheDbPath = () => path.join(cacheDataDir(), "products-cache.sqlite");
+const imageCacheDir = () => path.join(cacheDataDir(), "image-cache");
+
+function legacyProductCacheDbPath() {
+  return path.join(app.getPath("userData"), "products-cache.sqlite");
+}
+
+function migrateLegacyProductDbToRuntimeDir() {
+  const current = productCacheDbPath();
+  const legacy = legacyProductCacheDbPath();
+  if (current === legacy || fsSync.existsSync(current) || !fsSync.existsSync(legacy)) return;
+
+  fsSync.mkdirSync(path.dirname(current), { recursive: true });
+  for (const suffix of ["", "-wal", "-shm"]) {
+    const from = `${legacy}${suffix}`;
+    const to = `${current}${suffix}`;
+    if (fsSync.existsSync(from) && !fsSync.existsSync(to)) {
+      fsSync.copyFileSync(from, to);
+    }
+  }
+  addDiagnostic("cache", `Cache SQLite migrata da ${legacy} a ${current}.`);
+}
 
 async function readConfig() {
   try {
@@ -497,6 +547,7 @@ function deserializeCacheRow(row = {}) {
 
 function getProductDb() {
   if (productDb) return productDb;
+  migrateLegacyProductDbToRuntimeDir();
   productDb = new Database(productCacheDbPath());
   productDb.pragma("journal_mode = WAL");
   productDb.pragma("synchronous = NORMAL");
@@ -2420,7 +2471,17 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
   let cache = await ensureProductCache(false);
   const hasFilters = Boolean(search || stockStatus || setTerm || languageTerm || categoryIds.length || priceMin !== null || priceMax !== null || quantityMin !== null || quantityMax !== null || missingPrice || missingQuantity);
   const listParams = { page, search, stockStatus, setTerm, languageTerm, categoryIds, priceMin, priceMax, quantityMin, quantityMax, missingPrice, missingQuantity };
-  const localResult = localProductResultFromDb(cache, listParams);
+  const skipLocal = Boolean(params.skipLocal);
+  const localResult = skipLocal
+    ? {
+        rows: [],
+        total: cache.total || 0,
+        totalPages: Math.max(Math.ceil((cache.total || 0) / pageSize), 1),
+        page,
+        source: "miss",
+        hasFilters
+      }
+    : localProductResultFromDb(cache, listParams);
   const forceRemote = Boolean(params.forceRemote);
   const localOnly = Boolean(params.localOnly);
   const silent = Boolean(params.silent);

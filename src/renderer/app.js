@@ -316,6 +316,21 @@ function syncExclusiveFilterInputs() {
   els.quantityMaxInput.disabled = els.missingQuantityFilter.checked;
 }
 
+function hasHeavyRemoteFilter() {
+  return Boolean(
+    selectedCategoryIds().length
+      || els.setFilter.value
+      || els.languageFilter.value
+      || els.stockFilter.value
+      || els.priceMinInput.value.trim()
+      || els.priceMaxInput.value.trim()
+      || els.missingPriceFilter.checked
+      || els.quantityMinInput.value.trim()
+      || els.quantityMaxInput.value.trim()
+      || els.missingQuantityFilter.checked
+  );
+}
+
 function changeList(row) {
   const original = state.rows.find((current) => rowKey(current) === rowKey(row)) || row.importedBefore || row;
   const fields = [
@@ -663,8 +678,18 @@ async function loadProducts(page = state.page) {
   };
 
   setLoading(true);
-  setStatus(hasFilters ? "Cerco nella cache locale..." : "Caricamento prodotti...");
+  setStatus(hasFilters ? "Cerco prodotti..." : "Caricamento prodotti...");
   try {
+    if (hasFilters && hasHeavyRemoteFilter()) {
+      setStatus("Cerco prodotti su WooCommerce...");
+      const result = await window.magazzino.listProducts({ ...params, skipLocal: true });
+      if (requestId !== state.requestId) return;
+      applyProductResult(result);
+      setStatus(`${result.rows.length} prodotti caricati. Totale: ${result.total}.`);
+      return;
+    }
+
+    setStatus(hasFilters ? "Cerco nella cache locale..." : "Caricamento prodotti...");
     const localResult = await window.magazzino.listProducts({ ...params, localOnly: true });
     if (requestId !== state.requestId) return;
 
