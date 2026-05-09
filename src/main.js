@@ -834,6 +834,39 @@ function upsertProductRowsInDb(rows) {
   return updates.length;
 }
 
+function rowCountFromDb(db = getProductDb()) {
+  return db.prepare("SELECT COUNT(*) AS count FROM product_rows").get().count;
+}
+
+function updateCacheMetaInDb(meta = {}) {
+  const db = getProductDb();
+  const updatedAt = meta.updatedAt || new Date().toISOString();
+  if (meta.storeUrl !== undefined) setCacheMeta(db, "storeUrl", meta.storeUrl || "");
+  if (meta.complete !== undefined) setCacheMeta(db, "complete", meta.complete ? "true" : "false");
+  if (meta.total !== undefined) setCacheMeta(db, "total", Number(meta.total || 0));
+  if (meta.processedProducts !== undefined) setCacheMeta(db, "processedProducts", Number(meta.processedProducts || 0));
+  if (meta.downloadedBytes !== undefined) setCacheMeta(db, "downloadedBytes", Number(meta.downloadedBytes || 0));
+  setCacheMeta(db, "updatedAt", updatedAt);
+}
+
+function replaceCachePageInDb(page, rows, meta = {}) {
+  const targetPage = Number(page);
+  const db = getProductDb();
+  const transaction = db.transaction(() => {
+    if (ftsAvailable) {
+      db.prepare(`
+        DELETE FROM product_rows_fts
+        WHERE row_key IN (SELECT row_key FROM product_rows WHERE cache_page = ?)
+      `).run(targetPage);
+    }
+    db.prepare("DELETE FROM product_rows WHERE cache_page = ?").run(targetPage);
+    db.prepare("INSERT OR REPLACE INTO cached_pages (page) VALUES (?)").run(targetPage);
+  });
+  transaction();
+  upsertProductRowsInDb((rows || []).map((row) => ({ ...row, cachePage: targetPage })));
+  updateCacheMetaInDb(meta);
+}
+
 async function migrateJsonCacheToDbIfNeeded() {
   const db = getProductDb();
   if (getCacheMeta(db, "sqliteMigrated", "") === "true") return;
@@ -1292,21 +1325,29 @@ async function clearProductCache() {
 
 async function refreshCachePage(page) {
   const targetPage = Math.max(Number(page || 1), 1);
-  const cache = await readProductCache();
-  const nextCache = {
-    ...cache,
-    rows: (cache.rows || []).filter((row) => row.cachePage !== targetPage),
-    cachedPages: (cache.cachedPages || []).filter((cachedPage) => cachedPage !== targetPage),
-    updatedAt: new Date().toISOString()
-  };
-  await writeProductCache(nextCache);
+  const cache = await readProductCacheSummary();
+  const db = getProductDb();
+  const transaction = db.transaction(() => {
+    if (ftsAvailable) {
+      db.prepare(`
+        DELETE FROM product_rows_fts
+        WHERE row_key IN (SELECT row_key FROM product_rows WHERE cache_page = ?)
+      `).run(targetPage);
+    }
+    db.prepare("DELETE FROM product_rows WHERE cache_page = ?").run(targetPage);
+    db.prepare("DELETE FROM cached_pages WHERE page = ?").run(targetPage);
+    setCacheMeta(db, "updatedAt", new Date().toISOString());
+  });
+  transaction();
+  const cachedPages = (cache.cachedPages || []).filter((cachedPage) => cachedPage !== targetPage);
+  const rowCount = rowCountFromDb(db);
   addDiagnostic("cache", `Pagina ${targetPage} invalidata dalla cache.`);
   sendCacheStatus({
     syncing: false,
     complete: false,
-    cached: nextCache.cachedPages.length,
-    total: nextCache.total || 0,
-    rows: nextCache.rows.length,
+    cached: cachedPages.length,
+    total: cache.total || 0,
+    rows: rowCount,
     message: `Pagina ${targetPage} rimossa dalla cache.`
   });
   return getCacheInfo();
@@ -2235,29 +2276,29 @@ async function refreshModifiedProducts(cache) {
 
       const modified = await fetchModifiedRows(cache.updatedAt);
       if (modified.rows.length) {
-        const freshCache = await readProductCache();
-        freshCache.rows = mergeRows(freshCache.rows, modified.rows);
-        freshCache.updatedAt = new Date().toISOString();
-        await writeProductCache(freshCache);
+        upsertProductRowsInDb(modified.rows);
+        updateCacheMetaInDb({ updatedAt: new Date().toISOString() });
+        const freshCache = await readProductCacheSummary();
+        const rowCount = rowCountFromDb();
         sendCacheStatus({
           syncing: false,
           complete: Boolean(freshCache.complete),
-          cached: freshCache.processedProducts || freshCache.total || freshCache.rows.length,
-          total: freshCache.total || freshCache.rows.length,
-          rows: freshCache.rows.length,
+          cached: freshCache.processedProducts || freshCache.total || rowCount,
+          total: freshCache.total || rowCount,
+          rows: rowCount,
           message: `Cache aggiornata: ${modified.rows.length} righe modificate.`
         });
         addDiagnostic("cache", `Aggiornate ${modified.rows.length} righe modificate.`);
       } else {
-        const freshCache = await readProductCache();
-        freshCache.updatedAt = new Date().toISOString();
-        await writeProductCache(freshCache);
+        updateCacheMetaInDb({ updatedAt: new Date().toISOString() });
+        const freshCache = await readProductCacheSummary();
+        const rowCount = rowCountFromDb();
         sendCacheStatus({
           syncing: false,
           complete: Boolean(freshCache.complete),
-          cached: freshCache.processedProducts || freshCache.total || freshCache.rows.length,
-          total: freshCache.total || freshCache.rows.length,
-          rows: freshCache.rows.length,
+          cached: freshCache.processedProducts || freshCache.total || rowCount,
+          total: freshCache.total || rowCount,
+          rows: rowCount,
           message: "Cache ok."
         });
         addDiagnostic("cache", "Controllo modifiche completato: nessuna modifica.");
@@ -2455,42 +2496,47 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
     remoteTotal = pageRows.total;
     productCacheStats.downloadedBytes += pageRows.bytes || 0;
     const config = await readConfig();
-    const fullCache = await readProductCache();
-    const rowsBeforeMerge = hasFilters
-      ? (fullCache.rows || [])
-      : (fullCache.rows || []).filter((row) => row.cachePage !== page);
-    const nextRows = mergeRows(rowsBeforeMerge, pageRows.rows);
-    const nextCache = {
-      storeUrl: config.storeUrl,
-      complete: false,
-      total: hasFilters ? (fullCache.total || cache.total || pageRows.total) : pageRows.total,
-      processedProducts: hasFilters
-        ? Number(fullCache.processedProducts || cache.processedProducts || 0)
-        : Math.min(Math.max(Number(fullCache.processedProducts || cache.processedProducts || 0), page * 100), pageRows.total || page * 100),
-      rows: nextRows,
-      cachedPages: hasFilters
-        ? (fullCache.cachedPages || cache.cachedPages || [])
-        : Array.from(new Set([...(fullCache.cachedPages || cache.cachedPages || []), page])).sort((a, b) => a - b),
-      downloadedBytes: productCacheStats.downloadedBytes,
-      updatedAt: new Date().toISOString()
-    };
-    await writeProductCache(nextCache);
-    cache = nextCache;
-    const progress = cacheProgressText(Math.min(page * 100, pageRows.total || nextCache.total), pageRows.total || nextCache.total);
+    const updatedAt = new Date().toISOString();
+    const processedProducts = hasFilters
+      ? Number(cache.processedProducts || 0)
+      : Math.min(Math.max(Number(cache.processedProducts || 0), page * 100), pageRows.total || page * 100);
+    if (hasFilters) {
+      upsertProductRowsInDb(pageRows.rows);
+      updateCacheMetaInDb({
+        storeUrl: config.storeUrl,
+        complete: false,
+        total: cache.total || pageRows.total,
+        processedProducts,
+        downloadedBytes: productCacheStats.downloadedBytes,
+        updatedAt
+      });
+    } else {
+      replaceCachePageInDb(page, pageRows.rows, {
+        storeUrl: config.storeUrl,
+        complete: false,
+        total: pageRows.total,
+        processedProducts,
+        downloadedBytes: productCacheStats.downloadedBytes,
+        updatedAt
+      });
+    }
+    cache = await readProductCacheSummary();
+    const rowCount = rowCountFromDb();
+    const progress = cacheProgressText(Math.min(page * 100, pageRows.total || cache.total), pageRows.total || cache.total);
     if (!silent) {
       sendCacheStatus({
         syncing: false,
         complete: false,
-        cached: hasFilters ? nextCache.cachedPages.length : nextCache.cachedPages.length * 100,
-        total: nextCache.total,
-        rows: nextCache.rows.length,
+        cached: hasFilters ? rowCount : (cache.cachedPages || []).length * 100,
+        total: cache.total || pageRows.total,
+        rows: rowCount,
         downloadedBytes: progress.downloadedBytes,
         estimatedTotalBytes: progress.estimatedTotalBytes,
         bytesPerSecond: progress.bytesPerSecond,
         etaSeconds: progress.etaSeconds,
         message: hasFilters
-          ? `Ricerca salvata in cache: ${pageRows.rows.length} righe trovate. Cache locale: ${nextCache.rows.length} righe.`
-          : `Pagina ${page} salvata in cache. Cache locale: ${nextCache.cachedPages.length} pagine, ${nextCache.rows.length} righe.`
+          ? `Ricerca salvata in cache: ${pageRows.rows.length} righe trovate. Cache locale: ${rowCount} righe.`
+          : `Pagina ${page} salvata in cache. Cache locale: ${(cache.cachedPages || []).length} pagine, ${rowCount} righe.`
       });
     }
     addDiagnostic("cache", hasFilters
@@ -2535,21 +2581,17 @@ ipcMain.handle("products:preload-page", async (_event, params = {}) => {
     addDiagnostic("cache", `Preload pagina ${page} avviato.`);
     const pageRows = await fetchProductRowsPage(page, { cachePage: page });
     const config = await readConfig();
-    const fullCache = await readProductCache();
-    const nextCache = {
-      ...fullCache,
+    const processedProducts = Math.min(
+      Math.max(Number(cache.processedProducts || 0), page * 100),
+      pageRows.total || page * 100
+    );
+    replaceCachePageInDb(page, pageRows.rows, {
       storeUrl: config.storeUrl,
       complete: false,
-      total: pageRows.total || fullCache.total || cache.total,
-      processedProducts: Math.min(
-        Math.max(Number(fullCache.processedProducts || cache.processedProducts || 0), page * 100),
-        pageRows.total || page * 100
-      ),
-      rows: mergeRows((fullCache.rows || []).filter((row) => row.cachePage !== page), pageRows.rows),
-      cachedPages: Array.from(new Set([...(fullCache.cachedPages || cache.cachedPages || []), page])).sort((a, b) => a - b),
+      total: pageRows.total || cache.total,
+      processedProducts,
       updatedAt: new Date().toISOString()
-    };
-    await writeProductCache(nextCache);
+    });
     addDiagnostic("cache", `Preload pagina ${page} completato: ${pageRows.rows.length} righe in ${Date.now() - startedAt}ms.`);
     return true;
   } catch (error) {
