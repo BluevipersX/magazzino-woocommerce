@@ -751,6 +751,89 @@ function writeCacheToDb(cache) {
   transaction();
 }
 
+function productRowFromDb(db, key) {
+  const row = db.prepare(`
+    SELECT
+      id,
+      parent_id AS parentId,
+      type,
+      name,
+      sku,
+      image_url AS imageUrl,
+      image_alt AS imageAlt,
+      image_local_path AS imageLocalPath,
+      image_status AS imageStatus,
+      image_downloaded_at AS imageDownloadedAt,
+      created_at AS createdAt,
+      regular_price AS regularPrice,
+      sale_price AS salePrice,
+      stock_quantity AS stockQuantity,
+      stock_status AS stockStatus,
+      manage_stock AS manageStock,
+      permalink,
+      modified_at AS modifiedAt,
+      cache_page AS cachePage,
+      search_index AS searchIndex,
+      category_terms AS categoryTerms,
+      attributes_json AS attributesJson
+    FROM product_rows
+    WHERE row_key = @rowKey
+  `).get({ rowKey: key });
+  return row ? deserializeCacheRow(row) : null;
+}
+
+function upsertProductRowsInDb(rows) {
+  const updates = (Array.isArray(rows) ? rows : [rows]).filter(Boolean);
+  if (!updates.length) return 0;
+
+  const db = getProductDb();
+  const insertRow = db.prepare(`
+    INSERT OR REPLACE INTO product_rows (
+      row_key, id, parent_id, type, name, sku, image_url, image_alt, image_local_path, image_status, image_downloaded_at,
+      created_at, regular_price, sale_price, stock_quantity, stock_status, manage_stock,
+      permalink, modified_at, cache_page, search_index, set_terms, language_terms, category_terms, attributes_json
+    ) VALUES (
+      @rowKey, @id, @parentId, @type, @name, @sku, @imageUrl, @imageAlt, @imageLocalPath, @imageStatus, @imageDownloadedAt,
+      @createdAt, @regularPrice, @salePrice, @stockQuantity, @stockStatus, @manageStock,
+      @permalink, @modifiedAt, @cachePage, @searchIndex, @setTerms, @languageTerms, @categoryTerms, @attributesJson
+    )
+  `);
+  const deleteFts = ftsAvailable ? db.prepare("DELETE FROM product_rows_fts WHERE row_key = ?") : null;
+  const insertFts = ftsAvailable
+    ? db.prepare("INSERT INTO product_rows_fts (row_key, content) VALUES (?, ?)")
+    : null;
+  const updatedAt = new Date().toISOString();
+
+  const transaction = db.transaction(() => {
+    for (const row of updates) {
+      const key = rowKey(row);
+      const existing = productRowFromDb(db, key);
+      const merged = existing
+        ? {
+            ...existing,
+            ...row,
+            attributes: row.attributes && row.attributes.length ? row.attributes : existing.attributes,
+            categories: row.categories && row.categories.length ? row.categories : existing.categories,
+            cachePage: row.cachePage === undefined || row.cachePage === null ? existing.cachePage : row.cachePage,
+            imageLocalPath: row.imageLocalPath || existing.imageLocalPath || "",
+            imageStatus: row.imageStatus || existing.imageStatus || "",
+            imageDownloadedAt: row.imageDownloadedAt || existing.imageDownloadedAt || "",
+            modifiedAt: row.modifiedAt || updatedAt
+          }
+        : { ...row, modifiedAt: row.modifiedAt || updatedAt };
+      insertRow.run(serializeCacheRow(merged));
+      if (deleteFts && insertFts) {
+        deleteFts.run(key);
+        insertFts.run(key, productFtsText(merged));
+      }
+    }
+    setCacheMeta(db, "updatedAt", updatedAt);
+    if (ftsAvailable) setCacheMeta(db, "ftsUpdatedAt", updatedAt);
+  });
+  transaction();
+  return updates.length;
+}
+
 async function migrateJsonCacheToDbIfNeeded() {
   const db = getProductDb();
   if (getCacheMeta(db, "sqliteMigrated", "") === "true") return;
@@ -2497,22 +2580,8 @@ async function updateProductRemote(row) {
 }
 
 async function updateRowsInProductCache(rows) {
-  const cache = await readProductCache();
-  const updates = Array.isArray(rows) ? rows : [rows];
-  if (cache.rows && cache.rows.length && updates.length) {
-    cache.rows = cache.rows.map((cachedRow) => {
-      const row = updates.find((update) => cachedRow.id === update.id && cachedRow.parentId === update.parentId);
-      if (!row) return cachedRow;
-      return {
-        ...cachedRow,
-        regularPrice: row.regularPrice,
-        salePrice: row.salePrice,
-        stockQuantity: row.stockQuantity
-      };
-    });
-    cache.updatedAt = new Date().toISOString();
-    await writeProductCache(cache);
-  }
+  await fs.mkdir(path.dirname(productCacheDbPath()), { recursive: true });
+  return upsertProductRowsInDb(rows);
 }
 
 ipcMain.handle("products:update", async (_event, row, previousRow = null) => {
@@ -2520,9 +2589,36 @@ ipcMain.handle("products:update", async (_event, row, previousRow = null) => {
     throw new Error("Cache prodotti in generazione. Attendi il completamento prima di modificare.");
   }
 
+  let cacheWarning = "";
   try {
     await updateProductRemote(row);
+  } catch (error) {
+    try {
+      await appendChangeHistory({
+        status: "errore",
+        productId: row.id,
+        parentId: row.parentId || null,
+        name: row.name || "",
+        sku: row.sku || "",
+        before: historyRow(previousRow || row),
+        after: historyRow(row),
+        error: error.message || "Errore salvataggio"
+      });
+    } catch (historyError) {
+      addDiagnostic("history", `Storico non aggiornato dopo errore salvataggio: ${historyError.message}`);
+    }
+    addDiagnostic("products", `Errore salvataggio ${row.parentId ? `${row.parentId}/` : ""}${row.id}${row.sku ? ` SKU ${row.sku}` : ""}: ${error.message}`);
+    throw error;
+  }
+
+  try {
     await updateRowsInProductCache(row);
+  } catch (error) {
+    cacheWarning = error.message || "Cache locale non aggiornata";
+    addDiagnostic("cache", `WooCommerce salvato, cache locale non aggiornata per ${row.parentId ? `${row.parentId}/` : ""}${row.id}: ${cacheWarning}`);
+  }
+
+  try {
     await appendChangeHistory({
       status: "ok",
       productId: row.id,
@@ -2530,24 +2626,14 @@ ipcMain.handle("products:update", async (_event, row, previousRow = null) => {
       name: row.name || "",
       sku: row.sku || "",
       before: historyRow(previousRow || row),
-      after: historyRow(row)
+      after: historyRow(row),
+      warning: cacheWarning
     });
   } catch (error) {
-    await appendChangeHistory({
-      status: "errore",
-      productId: row.id,
-      parentId: row.parentId || null,
-      name: row.name || "",
-      sku: row.sku || "",
-      before: historyRow(previousRow || row),
-      after: historyRow(row),
-      error: error.message || "Errore salvataggio"
-    });
-    addDiagnostic("products", `Errore salvataggio ${row.parentId ? `${row.parentId}/` : ""}${row.id}${row.sku ? ` SKU ${row.sku}` : ""}: ${error.message}`);
-    throw error;
+    addDiagnostic("history", `WooCommerce salvato, storico non aggiornato per ${row.parentId ? `${row.parentId}/` : ""}${row.id}: ${error.message}`);
   }
 
-  return true;
+  return { ok: true, cacheWarning };
 });
 
 ipcMain.handle("products:bulk-update", async (_event, rows = []) => {
@@ -2578,12 +2664,19 @@ ipcMain.handle("products:bulk-update", async (_event, rows = []) => {
   });
 
   const savedRows = updates.filter((row) => results.some((result) => result.ok && result.id === row.id && result.parentId === (row.parentId || null)));
-  await updateRowsInProductCache(savedRows);
+  let cacheWarning = "";
+  try {
+    await updateRowsInProductCache(savedRows);
+  } catch (error) {
+    cacheWarning = error.message || "Cache locale non aggiornata";
+    addDiagnostic("cache", `WooCommerce bulk salvato, cache locale non aggiornata: ${cacheWarning}`);
+  }
   addDiagnostic("products", `Salvataggio bulk completato: ${savedRows.length} salvati, ${updates.length - savedRows.length} non salvati.`);
 
   return {
     saved: savedRows.length,
     failed: updates.length - savedRows.length,
-    results
+    results,
+    cacheWarning
   };
 });

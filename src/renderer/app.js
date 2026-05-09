@@ -739,10 +739,12 @@ async function saveRow(tr) {
   setLoading(true);
   setStatus(`Salvataggio ${row.name}...`);
   try {
-    await window.magazzino.updateProduct(row, state.rows[index]);
+    const result = await window.magazzino.updateProduct(row, state.rows[index]);
     state.rows[index] = row;
     state.dirtyRows.delete(rowKey(row));
-    setStatus("Prodotto aggiornato.", "ok");
+    setStatus(result && result.cacheWarning
+      ? `Prodotto salvato su WooCommerce. Cache locale non aggiornata: ${result.cacheWarning}`
+      : "Prodotto aggiornato.", result && result.cacheWarning ? "error" : "ok");
   } catch (error) {
     setStatus(error.message || "Errore durante il salvataggio.", "error");
   } finally {
@@ -772,10 +774,12 @@ async function saveGridCard(button) {
   setLoading(true);
   setStatus(`Salvataggio ${row.name}...`);
   try {
-    await window.magazzino.updateProduct(row, state.rows[index]);
+    const result = await window.magazzino.updateProduct(row, state.rows[index]);
     state.rows[index] = row;
     state.dirtyRows.delete(rowKey(row));
-    setStatus("Prodotto aggiornato.", "ok");
+    setStatus(result && result.cacheWarning
+      ? `Prodotto salvato su WooCommerce. Cache locale non aggiornata: ${result.cacheWarning}`
+      : "Prodotto aggiornato.", result && result.cacheWarning ? "error" : "ok");
   } catch (error) {
     setStatus(error.message || "Errore durante il salvataggio.", "error");
   } finally {
@@ -840,13 +844,15 @@ async function saveAllChanges() {
   setStatus(`Salvo 0/${rows.length} prodotti...`);
   try {
     let saved = 0;
+    let cacheWarnings = 0;
     const failures = [];
     for (let index = 0; index < rows.length; index += 1) {
       const row = rows[index];
       setStatus(`Salvo ${index + 1}/${rows.length}: ${row.name}`);
       try {
         const previousRow = state.rows.find((current) => rowKey(current) === rowKey(row)) || row.importedBefore || row;
-        await window.magazzino.updateProduct(row, previousRow);
+        const result = await window.magazzino.updateProduct(row, previousRow);
+        if (result && result.cacheWarning) cacheWarnings += 1;
         saved += 1;
       } catch (error) {
         failures.push({ row, error: error.message || "Errore salvataggio" });
@@ -860,6 +866,8 @@ async function saveAllChanges() {
 
     if (failures.length) {
       setStatus(`${saved} salvati, ${failures.length} non salvati. ${failures[0].error}`, "error");
+    } else if (cacheWarnings) {
+      setStatus(`${saved} prodotti salvati su WooCommerce. Cache locale non aggiornata per ${cacheWarnings} prodotti: libera spazio o svuota cache.`, "error");
     } else {
       setStatus(`${saved} prodotti salvati.`, "ok");
     }
