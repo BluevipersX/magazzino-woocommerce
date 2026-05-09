@@ -919,6 +919,10 @@ tr.dirty td:first-child {
   gap: 12px;
 }
 
+.bulkScopeFilter {
+  justify-self: start;
+}
+
 .passwordDialog {
   width: min(420px, 100%);
 }

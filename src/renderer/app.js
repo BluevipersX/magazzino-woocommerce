@@ -88,6 +88,7 @@ const els = {
   bulkFilteredRegularPrice: document.querySelector("#bulkFilteredRegularPrice"),
   bulkFilteredSalePrice: document.querySelector("#bulkFilteredSalePrice"),
   bulkFilteredStockQuantity: document.querySelector("#bulkFilteredStockQuantity"),
+  bulkFilteredAllResults: document.querySelector("#bulkFilteredAllResults"),
   bulkFilteredError: document.querySelector("#bulkFilteredError"),
   applyBulkFilteredButton: document.querySelector("#applyBulkFilteredButton"),
   cancelBulkFilteredButton: document.querySelector("#cancelBulkFilteredButton"),
@@ -329,6 +330,23 @@ function hasHeavyRemoteFilter() {
       || els.quantityMaxInput.value.trim()
       || els.missingQuantityFilter.checked
   );
+}
+
+function currentProductParams(page = state.page) {
+  return {
+    page,
+    search: els.searchInput.value,
+    setTerm: els.setFilter.value,
+    languageTerm: els.languageFilter.value,
+    stockStatus: els.stockFilter.value,
+    categoryIds: selectedCategoryIds(),
+    priceMin: els.priceMinInput.value,
+    priceMax: els.priceMaxInput.value,
+    missingPrice: els.missingPriceFilter.checked,
+    quantityMin: els.quantityMinInput.value,
+    quantityMax: els.quantityMaxInput.value,
+    missingQuantity: els.missingQuantityFilter.checked
+  };
 }
 
 function changeList(row) {
@@ -662,20 +680,7 @@ async function saveConfig() {
 async function loadProducts(page = state.page) {
   const requestId = ++state.requestId;
   const hasFilters = hasActiveFilters();
-  const params = {
-    page,
-    search: els.searchInput.value,
-    setTerm: els.setFilter.value,
-    languageTerm: els.languageFilter.value,
-    stockStatus: els.stockFilter.value,
-    categoryIds: selectedCategoryIds(),
-    priceMin: els.priceMinInput.value,
-    priceMax: els.priceMaxInput.value,
-    missingPrice: els.missingPriceFilter.checked,
-    quantityMin: els.quantityMinInput.value,
-    quantityMax: els.quantityMaxInput.value,
-    missingQuantity: els.missingQuantityFilter.checked
-  };
+  const params = currentProductParams(page);
 
   setLoading(true);
   setStatus(hasFilters ? "Cerco prodotti..." : "Caricamento prodotti...");
@@ -935,9 +940,10 @@ function openBulkFilteredModal() {
   els.bulkFilteredRegularPrice.value = "";
   els.bulkFilteredSalePrice.value = "";
   els.bulkFilteredStockQuantity.value = "";
+  els.bulkFilteredAllResults.checked = true;
   els.bulkFilteredError.hidden = true;
   els.bulkFilteredError.textContent = "";
-  els.bulkFilteredSummary.textContent = `${state.rows.length} prodotti caricati nella vista corrente verranno marcati come modifiche da salvare.`;
+  els.bulkFilteredSummary.textContent = `${state.rows.length} prodotti sono visibili in questa pagina. Puoi applicare i valori alla pagina oppure a tutti i risultati filtrati.`;
   els.bulkFilteredModal.classList.add("open");
   els.bulkFilteredModal.setAttribute("aria-hidden", "false");
   els.bulkFilteredRegularPrice.focus();
@@ -948,7 +954,7 @@ function closeBulkFilteredModal() {
   els.bulkFilteredModal.setAttribute("aria-hidden", "true");
 }
 
-function applyBulkFilteredChanges() {
+async function applyBulkFilteredChanges() {
   const updates = {};
   const regularPrice = els.bulkFilteredRegularPrice.value.trim();
   const salePrice = els.bulkFilteredSalePrice.value.trim();
@@ -966,6 +972,28 @@ function applyBulkFilteredChanges() {
   if (updates.stockQuantity !== undefined && !Number.isInteger(Number(updates.stockQuantity))) {
     els.bulkFilteredError.textContent = "La quantita deve essere un numero intero.";
     els.bulkFilteredError.hidden = false;
+    return;
+  }
+
+  if (els.bulkFilteredAllResults.checked) {
+    closeBulkFilteredModal();
+    state.savingBulk = true;
+    setLoading(true);
+    setStatus("Preparo modifica di tutti i risultati filtrati...");
+    try {
+      const result = await window.magazzino.updateFilteredProducts({
+        filters: currentProductParams(1),
+        updates
+      });
+      setStatus(`${result.saved} salvati, ${result.failed} non salvati su ${result.matched} prodotti filtrati. Aggiorno la ricerca...`, result.failed ? "error" : "ok");
+      await loadProducts(1);
+    } catch (error) {
+      setStatus(error.message || "Modifica bulk filtrati non riuscita.", "error");
+    } finally {
+      state.savingBulk = false;
+      setLoading(false);
+      renderRows();
+    }
     return;
   }
 
@@ -1341,6 +1369,10 @@ window.magazzino.onImagesCleared(() => {
     imageDownloadedAt: ""
   }));
   renderRows();
+});
+window.magazzino.onBulkFilteredProgress((payload) => {
+  if (!state.savingBulk) return;
+  setStatus(`Bulk filtrati: pagina ${payload.page}/${payload.totalPages}, ${payload.matched} trovati, ${payload.saved} salvati, ${payload.failed} errori.`);
 });
 window.magazzino.onWindowMaximized((isMaximized) => {
   els.maximizeButton.textContent = isMaximized ? "[_]" : "[ ]";

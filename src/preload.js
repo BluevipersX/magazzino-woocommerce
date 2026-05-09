@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld("magazzino", {
   preloadProductPage: (params) => ipcRenderer.invoke("products:preload-page", params),
   updateProduct: (row, previousRow) => ipcRenderer.invoke("products:update", row, previousRow),
   updateProducts: (rows) => ipcRenderer.invoke("products:bulk-update", rows),
+  updateFilteredProducts: (payload) => ipcRenderer.invoke("products:bulk-update-filtered", payload),
   getUpdateState: () => ipcRenderer.invoke("updates:state"),
   checkForUpdates: () => ipcRenderer.invoke("updates:check"),
   getCacheStatus: () => ipcRenderer.invoke("cache:status"),
@@ -48,6 +49,11 @@ contextBridge.exposeInMainWorld("magazzino", {
     const listener = () => callback();
     ipcRenderer.on("images:cleared", listener);
     return () => ipcRenderer.removeListener("images:cleared", listener);
+  },
+  onBulkFilteredProgress: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("products:bulk-filtered-progress", listener);
+    return () => ipcRenderer.removeListener("products:bulk-filtered-progress", listener);
   },
   onWindowMaximized: (callback) => {
     const listener = (_event, isMaximized) => callback(isMaximized);

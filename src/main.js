@@ -2301,6 +2301,57 @@ async function fetchProductRowsPage(page, params = {}) {
   };
 }
 
+async function fetchProductRowsForRemotePage(remotePage, params = {}) {
+  const filters = await productQueryFilters(params);
+  let useLocalAttributeFilter = filters.localAttributeFilter;
+  let query = {
+    page: remotePage,
+    per_page: 100,
+    status: "publish",
+    orderby: "date",
+    order: "desc",
+    _fields: productFields,
+    ...filters.query
+  };
+
+  let result = null;
+  try {
+    result = await wooRequest("products", { query });
+  } catch (error) {
+    if (!query.search_fields && !query.attribute) throw error;
+    query = { ...query };
+    delete query.search_fields;
+    if (query.attribute) {
+      delete query.attribute;
+      delete query.attribute_term;
+      useLocalAttributeFilter = filters.localAttributeFilter;
+    }
+    result = await wooRequest("products", { query });
+  }
+
+  const pageRows = await mapLimit(result.data || [], 3, async (product) => {
+    if (product.type === "variable") {
+      const variations = await wooRequest(`products/${product.id}/variations`, {
+        query: { per_page: 100, orderby: "date", order: "desc", _fields: variationFields }
+      });
+      return {
+        rows: (variations.data || []).map((variation) => productRow(product, variation)),
+        bytes: variations.bytes || 0
+      };
+    }
+    return { rows: [productRow(product)], bytes: 0 };
+  });
+
+  const rows = pageRows.flatMap((item) => item.rows);
+  return {
+    rows: useLocalAttributeFilter ? filterCachedRows(rows, params) : rows,
+    total: result.total,
+    totalPages: result.totalPages || 1,
+    processedProducts: (result.data || []).length,
+    bytes: (result.bytes || 0) + pageRows.reduce((total, item) => total + (item.bytes || 0), 0)
+  };
+}
+
 async function fetchModifiedRows(modifiedAfter) {
   const rows = [];
   let total = 0;
@@ -2824,4 +2875,63 @@ ipcMain.handle("products:bulk-update", async (_event, rows = []) => {
     results,
     cacheWarning
   };
+});
+
+ipcMain.handle("products:bulk-update-filtered", async (event, payload = {}) => {
+  if (productCacheStatus.syncing) {
+    throw new Error("Cache prodotti in generazione. Attendi il completamento prima di modificare.");
+  }
+
+  const filters = payload.filters || {};
+  const updates = payload.updates || {};
+  if (!Object.keys(updates).length) {
+    throw new Error("Nessun valore da applicare.");
+  }
+
+  let totalPages = 1;
+  let matched = 0;
+  let saved = 0;
+  let failed = 0;
+  let processedProducts = 0;
+
+  for (let page = 1; page <= totalPages; page += 1) {
+    const pageRows = await fetchProductRowsForRemotePage(page, filters);
+    totalPages = pageRows.totalPages || 1;
+    processedProducts += pageRows.processedProducts || 0;
+    matched += pageRows.rows.length;
+
+    const rowsToSave = pageRows.rows.map((row) => ({ ...row, ...updates }));
+    const results = await mapLimit(rowsToSave, 2, async (row) => {
+      try {
+        await updateProductRemote(row);
+        return { ok: true, row };
+      } catch (error) {
+        addDiagnostic("products", `Errore bulk filtrati ${row.parentId ? `${row.parentId}/` : ""}${row.id}${row.sku ? ` SKU ${row.sku}` : ""}: ${error.message}`);
+        return { ok: false, row, error: error.message || "Errore salvataggio" };
+      }
+    });
+
+    const savedRows = results.filter((result) => result.ok).map((result) => result.row);
+    saved += savedRows.length;
+    failed += results.length - savedRows.length;
+    try {
+      await updateRowsInProductCache(savedRows);
+    } catch (error) {
+      addDiagnostic("cache", `Cache non aggiornata durante bulk filtrati: ${error.message}`);
+    }
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("products:bulk-filtered-progress", {
+        page,
+        totalPages,
+        processedProducts,
+        matched,
+        saved,
+        failed
+      });
+    }
+  }
+
+  addDiagnostic("products", `Bulk filtrati completato: ${saved} salvati, ${failed} errori, ${matched} filtrati.`);
+  return { saved, failed, matched, processedProducts };
 });
