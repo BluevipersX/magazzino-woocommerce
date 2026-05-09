@@ -840,6 +840,15 @@ function preloadNeighborPages(page, totalPages) {
   });
 }
 
+async function reloadCurrentViewAfterSave(savedCount, failuresCount = 0) {
+  if (!savedCount || !hasActiveFilters()) return false;
+  setStatus(failuresCount
+    ? `${savedCount} salvati, ${failuresCount} non salvati. Aggiorno la ricerca...`
+    : `${savedCount} prodotti salvati. Aggiorno la ricerca...`, failuresCount ? "error" : "ok");
+  await loadProducts(state.page);
+  return true;
+}
+
 async function saveAllChanges() {
   if (state.cacheSyncing) {
     setStatus("Cache prodotti in generazione. Attendi il completamento prima di modificare.", "error");
@@ -888,6 +897,9 @@ async function saveAllChanges() {
       state.dirtyRows.delete(rowKey(row));
       renderRows();
     }
+
+    const reloaded = await reloadCurrentViewAfterSave(saved, failures.length);
+    if (reloaded) return;
 
     if (failures.length) {
       setStatus(`${saved} salvati, ${failures.length} non salvati. ${failures[0].error}`, "error");
