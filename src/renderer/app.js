@@ -75,6 +75,22 @@ const els = {
   setFilter: document.querySelector("#setFilter"),
   languageFilter: document.querySelector("#languageFilter"),
   stockFilter: document.querySelector("#stockFilter"),
+  categoryFilter: document.querySelector("#categoryFilter"),
+  priceMinInput: document.querySelector("#priceMinInput"),
+  priceMaxInput: document.querySelector("#priceMaxInput"),
+  missingPriceFilter: document.querySelector("#missingPriceFilter"),
+  quantityMinInput: document.querySelector("#quantityMinInput"),
+  quantityMaxInput: document.querySelector("#quantityMaxInput"),
+  missingQuantityFilter: document.querySelector("#missingQuantityFilter"),
+  bulkFilteredButton: document.querySelector("#bulkFilteredButton"),
+  bulkFilteredModal: document.querySelector("#bulkFilteredModal"),
+  bulkFilteredSummary: document.querySelector("#bulkFilteredSummary"),
+  bulkFilteredRegularPrice: document.querySelector("#bulkFilteredRegularPrice"),
+  bulkFilteredSalePrice: document.querySelector("#bulkFilteredSalePrice"),
+  bulkFilteredStockQuantity: document.querySelector("#bulkFilteredStockQuantity"),
+  bulkFilteredError: document.querySelector("#bulkFilteredError"),
+  applyBulkFilteredButton: document.querySelector("#applyBulkFilteredButton"),
+  cancelBulkFilteredButton: document.querySelector("#cancelBulkFilteredButton"),
   refreshButton: document.querySelector("#refreshButton"),
   updateButton: document.querySelector("#updateButton"),
   updateText: document.querySelector("#updateText"),
@@ -271,6 +287,35 @@ function rowHasChanges(row, values) {
     || original.stockQuantity !== values.stockQuantity;
 }
 
+function selectedCategoryIds() {
+  return Array.from(els.categoryFilter.selectedOptions || [])
+    .map((option) => option.value)
+    .filter(Boolean);
+}
+
+function hasActiveFilters() {
+  return Boolean(
+    els.searchInput.value.trim()
+      || els.setFilter.value
+      || els.languageFilter.value
+      || els.stockFilter.value
+      || selectedCategoryIds().length
+      || els.priceMinInput.value.trim()
+      || els.priceMaxInput.value.trim()
+      || els.missingPriceFilter.checked
+      || els.quantityMinInput.value.trim()
+      || els.quantityMaxInput.value.trim()
+      || els.missingQuantityFilter.checked
+  );
+}
+
+function syncExclusiveFilterInputs() {
+  els.priceMinInput.disabled = els.missingPriceFilter.checked;
+  els.priceMaxInput.disabled = els.missingPriceFilter.checked;
+  els.quantityMinInput.disabled = els.missingQuantityFilter.checked;
+  els.quantityMaxInput.disabled = els.missingQuantityFilter.checked;
+}
+
 function changeList(row) {
   const original = state.rows.find((current) => rowKey(current) === rowKey(row)) || row.importedBefore || row;
   const fields = [
@@ -419,6 +464,7 @@ function updateBulkControls() {
   els.discardAllButton.disabled = state.loading || state.savingBulk || count === 0;
   els.menuExportCsvButton.disabled = state.loading || state.savingBulk || !state.rows.length;
   els.menuImportCsvButton.disabled = state.loading || state.cacheSyncing || state.savingBulk;
+  els.bulkFilteredButton.disabled = state.loading || state.cacheSyncing || state.savingBulk || !state.rows.length || !hasActiveFilters();
 }
 
 function setDirtyRow(index, values) {
@@ -564,14 +610,22 @@ function renderTerms(select, placeholder, terms = []) {
   ].join("");
 }
 
+function renderCategoryTerms(terms = []) {
+  els.categoryFilter.innerHTML = terms
+    .map((term) => `<option value="${escapeAttr(term.id)}">${escapeHtml(term.name)}</option>`)
+    .join("");
+}
+
 async function loadAttributeFilters() {
   try {
     const filters = await window.magazzino.getAttributeFilters();
     renderTerms(els.setFilter, "Tutti i set", filters.set ? filters.set.terms : []);
     renderTerms(els.languageFilter, "Tutte le lingue", filters.language ? filters.language.terms : []);
+    renderCategoryTerms(filters.categories ? filters.categories.terms : []);
   } catch (error) {
     renderTerms(els.setFilter, "Set non disponibili", []);
     renderTerms(els.languageFilter, "Lingue non disponibili", []);
+    renderCategoryTerms([]);
     setStatus(error.message || "Impossibile leggere gli attributi.", "error");
   }
 }
@@ -592,13 +646,20 @@ async function saveConfig() {
 
 async function loadProducts(page = state.page) {
   const requestId = ++state.requestId;
-  const hasFilters = Boolean(els.searchInput.value || els.setFilter.value || els.languageFilter.value || els.stockFilter.value);
+  const hasFilters = hasActiveFilters();
   const params = {
     page,
     search: els.searchInput.value,
     setTerm: els.setFilter.value,
     languageTerm: els.languageFilter.value,
-    stockStatus: els.stockFilter.value
+    stockStatus: els.stockFilter.value,
+    categoryIds: selectedCategoryIds(),
+    priceMin: els.priceMinInput.value,
+    priceMax: els.priceMaxInput.value,
+    missingPrice: els.missingPriceFilter.checked,
+    quantityMin: els.quantityMinInput.value,
+    quantityMax: els.quantityMaxInput.value,
+    missingQuantity: els.missingQuantityFilter.checked
   };
 
   setLoading(true);
@@ -817,6 +878,70 @@ function discardAllChanges() {
   renderRows();
 }
 
+function openBulkFilteredModal() {
+  if (!state.rows.length) {
+    setStatus("Nessun prodotto filtrato da modificare.", "error");
+    return;
+  }
+  if (!hasActiveFilters()) {
+    setStatus("Applica almeno un filtro prima della modifica bulk.", "error");
+    return;
+  }
+  els.bulkFilteredRegularPrice.value = "";
+  els.bulkFilteredSalePrice.value = "";
+  els.bulkFilteredStockQuantity.value = "";
+  els.bulkFilteredError.hidden = true;
+  els.bulkFilteredError.textContent = "";
+  els.bulkFilteredSummary.textContent = `${state.rows.length} prodotti caricati nella vista corrente verranno marcati come modifiche da salvare.`;
+  els.bulkFilteredModal.classList.add("open");
+  els.bulkFilteredModal.setAttribute("aria-hidden", "false");
+  els.bulkFilteredRegularPrice.focus();
+}
+
+function closeBulkFilteredModal() {
+  els.bulkFilteredModal.classList.remove("open");
+  els.bulkFilteredModal.setAttribute("aria-hidden", "true");
+}
+
+function applyBulkFilteredChanges() {
+  const updates = {};
+  const regularPrice = els.bulkFilteredRegularPrice.value.trim();
+  const salePrice = els.bulkFilteredSalePrice.value.trim();
+  const stockQuantity = els.bulkFilteredStockQuantity.value.trim();
+
+  if (regularPrice !== "") updates.regularPrice = regularPrice;
+  if (salePrice !== "") updates.salePrice = salePrice;
+  if (stockQuantity !== "") updates.stockQuantity = stockQuantity;
+
+  if (!Object.keys(updates).length) {
+    els.bulkFilteredError.textContent = "Inserisci almeno un valore da applicare.";
+    els.bulkFilteredError.hidden = false;
+    return;
+  }
+  if (updates.stockQuantity !== undefined && !Number.isInteger(Number(updates.stockQuantity))) {
+    els.bulkFilteredError.textContent = "La quantita deve essere un numero intero.";
+    els.bulkFilteredError.hidden = false;
+    return;
+  }
+
+  let changed = 0;
+  state.rows.forEach((baseRow) => {
+    const nextRow = { ...editableRow(baseRow), ...updates };
+    const values = editableSnapshot(nextRow);
+    const key = rowKey(baseRow);
+    if (rowHasChanges(baseRow, values)) {
+      state.dirtyRows.set(key, nextRow);
+      changed += 1;
+    } else {
+      state.dirtyRows.delete(key);
+    }
+  });
+
+  closeBulkFilteredModal();
+  renderRows();
+  setStatus(`${changed} prodotti filtrati aggiornati in attesa di Salva tutto.`, changed ? "ok" : "normal");
+}
+
 async function exportCsv() {
   if (!state.rows.length) {
     setStatus("Nessun prodotto da esportare.", "error");
@@ -1003,6 +1128,10 @@ document.addEventListener("keydown", (event) => {
     els.cancelImportPasswordButton.click();
     return;
   }
+  if (event.key === "Escape" && els.bulkFilteredModal.classList.contains("open")) {
+    closeBulkFilteredModal();
+    return;
+  }
   if (event.key === "Escape" && els.configModal.classList.contains("open")) {
     closeSettings();
     return;
@@ -1027,6 +1156,12 @@ els.copyImportCsvButton.addEventListener("click", async () => {
 });
 els.importCsvModal.addEventListener("click", (event) => {
   if (event.target === els.importCsvModal) closeImportCsv();
+});
+els.bulkFilteredButton.addEventListener("click", openBulkFilteredModal);
+els.applyBulkFilteredButton.addEventListener("click", applyBulkFilteredChanges);
+els.cancelBulkFilteredButton.addEventListener("click", closeBulkFilteredModal);
+els.bulkFilteredModal.addEventListener("click", (event) => {
+  if (event.target === els.bulkFilteredModal) closeBulkFilteredModal();
 });
 els.saveAllButton.addEventListener("click", saveAllChanges);
 els.discardAllButton.addEventListener("click", discardAllChanges);
@@ -1073,6 +1208,30 @@ els.pageInput.addEventListener("keydown", (event) => {
 els.stockFilter.addEventListener("change", () => loadProducts(1));
 els.setFilter.addEventListener("change", () => loadProducts(1));
 els.languageFilter.addEventListener("change", () => loadProducts(1));
+els.categoryFilter.addEventListener("change", () => loadProducts(1));
+[
+  els.priceMinInput,
+  els.priceMaxInput,
+  els.quantityMinInput,
+  els.quantityMaxInput
+].forEach((input) => {
+  input.addEventListener("change", () => loadProducts(1));
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      loadProducts(1);
+      input.blur();
+    }
+  });
+});
+els.missingPriceFilter.addEventListener("change", () => {
+  syncExclusiveFilterInputs();
+  loadProducts(1);
+});
+els.missingQuantityFilter.addEventListener("change", () => {
+  syncExclusiveFilterInputs();
+  loadProducts(1);
+});
 els.searchInput.addEventListener("input", scheduleLiveSearch);
 els.searchInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") loadProducts(1);
@@ -1149,5 +1308,6 @@ window.magazzino.getCacheStatus().then(setCacheStatus);
 refreshCacheInfo().catch(() => {});
 applyTheme(state.theme);
 setProductView(localStorage.getItem("productView") || "list");
+syncExclusiveFilterInputs();
 loadConfig();
 renderRows();

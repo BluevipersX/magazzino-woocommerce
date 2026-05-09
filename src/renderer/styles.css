@@ -328,9 +328,20 @@ main {
 .toolbar,
 .statusbar {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
+}
+
+.toolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, auto) minmax(0, 1fr);
+  row-gap: 10px;
+}
+
+.toolbar .filters,
+.toolbar .advancedFilters {
+  justify-self: end;
 }
 
 .filters {
@@ -340,7 +351,53 @@ main {
   width: min(1020px, 100%);
 }
 
+.advancedFilters {
+  display: grid;
+  grid-column: 2;
+  grid-template-columns: minmax(180px, 1.25fr) repeat(2, minmax(94px, 0.7fr)) minmax(116px, auto) repeat(2, minmax(94px, 0.7fr)) minmax(126px, auto) minmax(136px, auto);
+  align-items: end;
+  gap: 10px;
+  width: min(1020px, 100%);
+}
+
+.compactField {
+  gap: 5px;
+  color: var(--color-text-soft);
+  font-size: 11px;
+}
+
+.compactField input,
+.compactField select {
+  height: 36px;
+}
+
+.compactField select[multiple] {
+  min-height: 76px;
+  padding: 6px 8px;
+}
+
+.checkFilter {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--radius-md);
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.checkFilter input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
 .statusbar {
+  align-items: center;
   min-height: 44px;
   color: var(--color-text-soft);
 }
@@ -852,6 +909,16 @@ tr.dirty td:first-child {
   width: min(680px, 100%);
 }
 
+.bulkFilteredDialog {
+  width: min(620px, 100%);
+}
+
+.bulkFilteredFields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .passwordDialog {
   width: min(420px, 100%);
 }
@@ -956,7 +1023,16 @@ tr.dirty td:first-child {
     flex-direction: column;
   }
 
+  .toolbar {
+    display: flex;
+  }
+
   .filters {
+    grid-template-columns: 1fr;
+  }
+
+  .advancedFilters,
+  .bulkFilteredFields {
     grid-template-columns: 1fr;
   }
 

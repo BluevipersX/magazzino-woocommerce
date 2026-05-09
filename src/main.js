@@ -39,6 +39,7 @@ const productFields = [
   "name",
   "sku",
   "images",
+  "categories",
   "date_created_gmt",
   "regular_price",
   "sale_price",
@@ -393,6 +394,21 @@ function productRowTerms(row = {}, wantedKeys = []) {
     .join(" ");
 }
 
+function productCategoryTerms(row = {}) {
+  const terms = (row.categories || [])
+    .flatMap((category) => [category.id, normalizeSlug(category.slug || category.name), normalizeSlug(category.name)])
+    .filter(Boolean);
+  return terms.length ? `|${terms.join("|")}|` : "";
+}
+
+function parseCategoryTerms(value = "") {
+  return String(value || "")
+    .split("|")
+    .map((term) => term.trim())
+    .filter(Boolean)
+    .map((term) => ({ id: term, name: term, slug: term }));
+}
+
 function productFtsText(row = {}) {
   const attributes = (row.attributes || [])
     .flatMap((attr) => [attr.key, attr.term, attr.value])
@@ -437,6 +453,7 @@ function serializeCacheRow(row = {}) {
     searchIndex: rowSearchIndex(row),
     setTerms: productRowTerms(row, ["set"]),
     languageTerms: productRowTerms(row, ["lingua", "language"]),
+    categoryTerms: productCategoryTerms(row),
     attributesJson: JSON.stringify(row.attributes || [])
   };
 }
@@ -472,6 +489,7 @@ function deserializeCacheRow(row = {}) {
     permalink: row.permalink || "",
     modifiedAt: row.modifiedAt || "",
     attributes,
+    categories: parseCategoryTerms(row.categoryTerms || ""),
     cachePage: row.cachePage,
     searchIndex: row.searchIndex || ""
   };
@@ -514,6 +532,7 @@ function getProductDb() {
       search_index TEXT,
       set_terms TEXT,
       language_terms TEXT,
+      category_terms TEXT,
       attributes_json TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_product_rows_id ON product_rows(id);
@@ -531,8 +550,10 @@ function getProductDb() {
   ensureProductRowColumn(productDb, "image_status", "TEXT");
   ensureProductRowColumn(productDb, "image_downloaded_at", "TEXT");
   ensureProductRowColumn(productDb, "created_at", "TEXT");
+  ensureProductRowColumn(productDb, "category_terms", "TEXT");
   productDb.prepare("CREATE INDEX IF NOT EXISTS idx_product_rows_image_status ON product_rows(image_status)").run();
   productDb.prepare("CREATE INDEX IF NOT EXISTS idx_product_rows_created_at ON product_rows(created_at)").run();
+  productDb.prepare("CREATE INDEX IF NOT EXISTS idx_product_rows_category_terms ON product_rows(category_terms)").run();
   setupFts(productDb);
   return productDb;
 }
@@ -644,6 +665,7 @@ function rowsFromDb(db) {
       modified_at AS modifiedAt,
       cache_page AS cachePage,
       search_index AS searchIndex,
+      category_terms AS categoryTerms,
       attributes_json AS attributesJson
     FROM product_rows
     ORDER BY COALESCE(created_at, modified_at, '') DESC, id DESC
@@ -685,11 +707,11 @@ function writeCacheToDb(cache) {
     INSERT OR REPLACE INTO product_rows (
       row_key, id, parent_id, type, name, sku, image_url, image_alt, image_local_path, image_status, image_downloaded_at,
       created_at, regular_price, sale_price, stock_quantity, stock_status, manage_stock,
-      permalink, modified_at, cache_page, search_index, set_terms, language_terms, attributes_json
+      permalink, modified_at, cache_page, search_index, set_terms, language_terms, category_terms, attributes_json
     ) VALUES (
       @rowKey, @id, @parentId, @type, @name, @sku, @imageUrl, @imageAlt, @imageLocalPath, @imageStatus, @imageDownloadedAt,
       @createdAt, @regularPrice, @salePrice, @stockQuantity, @stockStatus, @manageStock,
-      @permalink, @modifiedAt, @cachePage, @searchIndex, @setTerms, @languageTerms, @attributesJson
+      @permalink, @modifiedAt, @cachePage, @searchIndex, @setTerms, @languageTerms, @categoryTerms, @attributesJson
     )
   `);
   const insertFts = ftsAvailable
@@ -1461,7 +1483,8 @@ function productRow(product, variation = null) {
     manageStock: Boolean(item.manage_stock),
     permalink: product.permalink || "",
     modifiedAt: item.date_modified_gmt || product.date_modified_gmt || "",
-    attributes: normalizeRowAttributes(product, variation)
+    attributes: normalizeRowAttributes(product, variation),
+    categories: normalizeRowCategories(product)
   };
   row.searchIndex = rowSearchIndex(row);
   return row;
@@ -1486,6 +1509,26 @@ function normalizeSearchText(value) {
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function normalizeCsvList(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
+  return String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function decimalFilterValue(value) {
+  const text = String(value ?? "").trim().replace(",", ".");
+  return text === "" || Number.isNaN(Number(text)) ? null : Number(text);
+}
+
+function rowPriceValue(row) {
+  const value = String(row.regularPrice ?? "").trim().replace(",", ".");
+  return value === "" || Number.isNaN(Number(value)) ? null : Number(value);
+}
+
+function rowQuantityValue(row) {
+  const value = String(row.stockQuantity ?? "").trim();
+  return value === "" || !Number.isInteger(Number(value)) ? null : Number(value);
 }
 
 function rowSearchIndex(row = {}) {
@@ -1530,16 +1573,26 @@ function normalizeRowAttributes(product, variation = null) {
   return rows;
 }
 
+function normalizeRowCategories(product) {
+  return (product.categories || []).map((category) => ({
+    id: category.id,
+    name: String(category.name || ""),
+    slug: String(category.slug || "")
+  }));
+}
+
 function rowMatchesFilters(row, filters = {}) {
   const setTerm = normalizeSlug(filters.setTerm);
   const languageTerm = normalizeSlug(filters.languageTerm);
+  const categoryIds = normalizeCsvList(filters.categoryIds);
   const hasAttribute = (key, term) => !term || row.attributes.some((attr) => attr.key === key && attr.term === term);
+  const hasCategories = !categoryIds.length || categoryIds.every((categoryId) => productCategoryTerms(row).includes(`|${categoryId}|`));
 
   const hasLanguage = !languageTerm
     || hasAttribute("lingua", languageTerm)
     || hasAttribute("language", languageTerm);
 
-  return hasAttribute("set", setTerm) && hasLanguage;
+  return hasAttribute("set", setTerm) && hasLanguage && hasCategories;
 }
 
 function rowMatchesSearch(row, search) {
@@ -1554,10 +1607,24 @@ function rowMatchesStock(row, stockStatus) {
 }
 
 function filterCachedRows(rows, params) {
+  const priceMin = decimalFilterValue(params.priceMin);
+  const priceMax = decimalFilterValue(params.priceMax);
+  const quantityMin = decimalFilterValue(params.quantityMin);
+  const quantityMax = decimalFilterValue(params.quantityMax);
+  const missingPrice = Boolean(params.missingPrice);
+  const missingQuantity = Boolean(params.missingQuantity);
   return rows.filter((row) => {
+    const price = rowPriceValue(row);
+    const quantity = rowQuantityValue(row);
     return rowMatchesSearch(row, params.search)
       && rowMatchesStock(row, params.stockStatus)
-      && rowMatchesFilters(row, params);
+      && rowMatchesFilters(row, params)
+      && (!missingPrice || price === null)
+      && (!missingQuantity || quantity === null)
+      && (missingPrice || priceMin === null || (price !== null && price >= priceMin))
+      && (missingPrice || priceMax === null || (price !== null && price <= priceMax))
+      && (missingQuantity || quantityMin === null || (quantity !== null && quantity >= quantityMin))
+      && (missingQuantity || quantityMax === null || (quantity !== null && quantity <= quantityMax));
   });
 }
 
@@ -1579,12 +1646,19 @@ function localProductResult(cache, params = {}) {
   const stockStatus = String(params.stockStatus || "");
   const setTerm = String(params.setTerm || "").trim();
   const languageTerm = String(params.languageTerm || "").trim();
-  const hasFilters = Boolean(search || stockStatus || setTerm || languageTerm);
+  const categoryIds = normalizeCsvList(params.categoryIds);
+  const priceMin = decimalFilterValue(params.priceMin);
+  const priceMax = decimalFilterValue(params.priceMax);
+  const quantityMin = decimalFilterValue(params.quantityMin);
+  const quantityMax = decimalFilterValue(params.quantityMax);
+  const missingPrice = Boolean(params.missingPrice);
+  const missingQuantity = Boolean(params.missingQuantity);
+  const hasFilters = Boolean(search || stockStatus || setTerm || languageTerm || categoryIds.length || priceMin !== null || priceMax !== null || quantityMin !== null || quantityMax !== null || missingPrice || missingQuantity);
   const hasCachedPage = !hasFilters && (cache.cachedPages || []).includes(page);
   const rows = cache.rows || [];
 
   if (hasFilters) {
-    const filteredRows = filterCachedRows(rows, { search, stockStatus, setTerm, languageTerm });
+    const filteredRows = filterCachedRows(rows, { search, stockStatus, setTerm, languageTerm, categoryIds, priceMin, priceMax, quantityMin, quantityMax, missingPrice, missingQuantity });
     return {
       rows: paginateRows(filteredRows, page, pageSize),
       total: filteredRows.length,
@@ -1629,7 +1703,14 @@ function localProductResultFromDb(cache, params = {}) {
   const stockStatus = String(params.stockStatus || "");
   const setTerm = normalizeSlug(params.setTerm);
   const languageTerm = normalizeSlug(params.languageTerm);
-  const hasFilters = Boolean(search || stockStatus || setTerm || languageTerm);
+  const categoryIds = normalizeCsvList(params.categoryIds);
+  const priceMin = decimalFilterValue(params.priceMin);
+  const priceMax = decimalFilterValue(params.priceMax);
+  const quantityMin = decimalFilterValue(params.quantityMin);
+  const quantityMax = decimalFilterValue(params.quantityMax);
+  const missingPrice = Boolean(params.missingPrice);
+  const missingQuantity = Boolean(params.missingQuantity);
+  const hasFilters = Boolean(search || stockStatus || setTerm || languageTerm || categoryIds.length || priceMin !== null || priceMax !== null || quantityMin !== null || quantityMax !== null || missingPrice || missingQuantity);
   const hasCachedPage = !hasFilters && (cache.cachedPages || []).includes(page);
   const where = [];
   const bindings = {};
@@ -1664,6 +1745,40 @@ function localProductResultFromDb(cache, params = {}) {
     if (languageTerm) {
       where.push("language_terms LIKE @languageTerm ESCAPE '\\'");
       bindings.languageTerm = buildSqlLike(languageTerm);
+    }
+    categoryIds.forEach((categoryId, index) => {
+      where.push(`category_terms LIKE @category${index} ESCAPE '\\'`);
+      bindings[`category${index}`] = `%|${String(categoryId).replace(/[\\%_]/g, (char) => `\\${char}`)}|%`;
+    });
+    if (missingPrice) {
+      where.push("(regular_price IS NULL OR regular_price = '')");
+    } else {
+      if (priceMin !== null || priceMax !== null) {
+        where.push("(regular_price IS NOT NULL AND regular_price != '')");
+      }
+      if (priceMin !== null) {
+        where.push("CAST(regular_price AS REAL) >= @priceMin");
+        bindings.priceMin = priceMin;
+      }
+      if (priceMax !== null) {
+        where.push("CAST(regular_price AS REAL) <= @priceMax");
+        bindings.priceMax = priceMax;
+      }
+    }
+    if (missingQuantity) {
+      where.push("(stock_quantity IS NULL OR stock_quantity = '')");
+    } else {
+      if (quantityMin !== null || quantityMax !== null) {
+        where.push("(stock_quantity IS NOT NULL AND stock_quantity != '')");
+      }
+      if (quantityMin !== null) {
+        where.push("CAST(stock_quantity AS REAL) >= @quantityMin");
+        bindings.quantityMin = quantityMin;
+      }
+      if (quantityMax !== null) {
+        where.push("CAST(stock_quantity AS REAL) <= @quantityMax");
+        bindings.quantityMax = quantityMax;
+      }
     }
   } else if (hasCachedPage) {
     where.push("cache_page = @cachePage");
@@ -1709,6 +1824,7 @@ function localProductResultFromDb(cache, params = {}) {
         modified_at AS modifiedAt,
         cache_page AS cachePage,
         search_index AS searchIndex,
+        category_terms AS categoryTerms,
         attributes_json AS attributesJson
       ${fromSql}
       ${whereSql}
@@ -1804,6 +1920,23 @@ async function getAttributeTerms(attribute) {
   }));
 }
 
+async function getProductCategoryTerms() {
+  const terms = [];
+  let totalPages = 1;
+  for (let page = 1; page <= totalPages; page += 1) {
+    const result = await wooRequest("products/categories", {
+      query: { page, per_page: 100, orderby: "name", order: "asc" }
+    });
+    totalPages = result.totalPages || 1;
+    terms.push(...(result.data || []).map((term) => ({
+      id: term.id,
+      name: term.name,
+      slug: term.slug
+    })));
+  }
+  return terms;
+}
+
 async function getAttributeFilterConfig() {
   if (attributeFilterCache) return attributeFilterCache;
 
@@ -1826,7 +1959,10 @@ async function getAttributeFilterConfig() {
       slug: languageAttribute.slug,
       queryName: languageAttribute.slug || `pa_${normalizeSlug(languageAttribute.name)}`,
       terms: await getAttributeTerms(languageAttribute)
-    } : null
+    } : null,
+    categories: {
+      terms: await getProductCategoryTerms()
+    }
   };
 
   return attributeFilterCache;
@@ -1850,8 +1986,15 @@ async function productQueryFilters(params = {}) {
   const stockStatus = String(params.stockStatus || "");
   const setTerm = String(params.setTerm || "").trim();
   const languageTerm = String(params.languageTerm || "").trim();
+  const categoryIds = normalizeCsvList(params.categoryIds);
+  const priceMin = decimalFilterValue(params.priceMin);
+  const priceMax = decimalFilterValue(params.priceMax);
+  const quantityMin = decimalFilterValue(params.quantityMin);
+  const quantityMax = decimalFilterValue(params.quantityMax);
+  const missingPrice = Boolean(params.missingPrice);
+  const missingQuantity = Boolean(params.missingQuantity);
   const query = {};
-  let localAttributeFilter = Boolean(setTerm || languageTerm);
+  let localAttributeFilter = Boolean(setTerm || languageTerm || quantityMin !== null || quantityMax !== null || missingPrice || missingQuantity);
 
   if (search) {
     query.search = search;
@@ -1859,6 +2002,9 @@ async function productQueryFilters(params = {}) {
   }
 
   if (stockStatus) query.stock_status = stockStatus;
+  if (categoryIds.length) query.category = categoryIds.join(",");
+  if (!missingPrice && priceMin !== null) query.min_price = String(priceMin);
+  if (!missingPrice && priceMax !== null) query.max_price = String(priceMax);
 
   if (setTerm || languageTerm) {
     const filterConfig = await getAttributeFilterConfig();
@@ -1900,7 +2046,7 @@ async function fetchProductRowsPage(page, params = {}) {
     if (query.attribute) {
       delete query.attribute;
       delete query.attribute_term;
-      useLocalAttributeFilter = Boolean(params.setTerm || params.languageTerm);
+      useLocalAttributeFilter = filters.localAttributeFilter;
     }
     result = await wooRequest("products", { query });
   }
@@ -2139,10 +2285,18 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
   const stockStatus = String(params.stockStatus || "");
   const setTerm = String(params.setTerm || "").trim();
   const languageTerm = String(params.languageTerm || "").trim();
+  const categoryIds = normalizeCsvList(params.categoryIds);
+  const priceMin = decimalFilterValue(params.priceMin);
+  const priceMax = decimalFilterValue(params.priceMax);
+  const quantityMin = decimalFilterValue(params.quantityMin);
+  const quantityMax = decimalFilterValue(params.quantityMax);
+  const missingPrice = Boolean(params.missingPrice);
+  const missingQuantity = Boolean(params.missingQuantity);
   const pageSize = 100;
   let cache = await ensureProductCache(false);
-  const hasFilters = Boolean(search || stockStatus || setTerm || languageTerm);
-  const localResult = localProductResultFromDb(cache, { page, search, stockStatus, setTerm, languageTerm });
+  const hasFilters = Boolean(search || stockStatus || setTerm || languageTerm || categoryIds.length || priceMin !== null || priceMax !== null || quantityMin !== null || quantityMax !== null || missingPrice || missingQuantity);
+  const listParams = { page, search, stockStatus, setTerm, languageTerm, categoryIds, priceMin, priceMax, quantityMin, quantityMax, missingPrice, missingQuantity };
+  const localResult = localProductResultFromDb(cache, listParams);
   const forceRemote = Boolean(params.forceRemote);
   const localOnly = Boolean(params.localOnly);
   const silent = Boolean(params.silent);
@@ -2182,6 +2336,13 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
         stockStatus,
         setTerm,
         languageTerm,
+        categoryIds,
+        priceMin,
+        priceMax,
+        quantityMin,
+        quantityMax,
+        missingPrice,
+        missingQuantity,
         cachePage: hasFilters ? null : page
       });
     } catch (error) {

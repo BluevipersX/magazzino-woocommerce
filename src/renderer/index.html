@@ -76,6 +76,37 @@
             <button id="refreshButton" type="button">Aggiorna</button>
             <button id="settingsButton" class="secondary" type="button">Impostazioni</button>
           </div>
+          <div class="advancedFilters">
+            <label class="compactField">
+              Categorie
+              <select id="categoryFilter" multiple size="3"></select>
+            </label>
+            <label class="compactField">
+              Prezzo min
+              <input id="priceMinInput" type="number" min="0" step="0.01" inputmode="decimal" />
+            </label>
+            <label class="compactField">
+              Prezzo max
+              <input id="priceMaxInput" type="number" min="0" step="0.01" inputmode="decimal" />
+            </label>
+            <label class="checkFilter">
+              <input id="missingPriceFilter" type="checkbox" />
+              Senza prezzo
+            </label>
+            <label class="compactField">
+              Quantita min
+              <input id="quantityMinInput" type="number" step="1" inputmode="numeric" />
+            </label>
+            <label class="compactField">
+              Quantita max
+              <input id="quantityMaxInput" type="number" step="1" inputmode="numeric" />
+            </label>
+            <label class="checkFilter">
+              <input id="missingQuantityFilter" type="checkbox" />
+              Senza quantita
+            </label>
+            <button id="bulkFilteredButton" class="secondary" type="button">Modifica filtrati</button>
+          </div>
         </header>
 
         <section class="statusbar">
@@ -278,6 +309,35 @@
         <div class="buttonRow">
           <button id="confirmImportPasswordButton" type="button">Conferma</button>
           <button id="cancelImportPasswordButton" class="secondary" type="button">Annulla</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="bulkFilteredModal" class="modalOverlay" aria-hidden="true">
+      <section class="settingsDialog bulkFilteredDialog">
+        <div>
+          <p class="eyebrow">Modifica filtrati</p>
+          <h3>Applica valori alla vista corrente</h3>
+        </div>
+        <div id="bulkFilteredSummary" class="settingsHint"></div>
+        <div class="bulkFilteredFields">
+          <label>
+            Prezzo
+            <input id="bulkFilteredRegularPrice" type="number" min="0" step="0.01" inputmode="decimal" />
+          </label>
+          <label>
+            Prezzo scontato
+            <input id="bulkFilteredSalePrice" type="number" min="0" step="0.01" inputmode="decimal" />
+          </label>
+          <label>
+            Quantita
+            <input id="bulkFilteredStockQuantity" type="number" step="1" inputmode="numeric" />
+          </label>
+        </div>
+        <div id="bulkFilteredError" class="settingsHint errorText" hidden></div>
+        <div class="buttonRow">
+          <button id="applyBulkFilteredButton" type="button">Applica modifiche</button>
+          <button id="cancelBulkFilteredButton" class="secondary" type="button">Annulla</button>
         </div>
       </section>
     </div>
