@@ -2201,8 +2201,11 @@ async function productQueryFilters(params = {}) {
 async function fetchProductRowsPage(page, params = {}) {
   const filters = await productQueryFilters(params);
   let useLocalAttributeFilter = filters.localAttributeFilter;
+  const pageSize = 100;
+  const targetPage = Math.max(Number(page || 1), 1);
+  const wantedRows = targetPage * pageSize + (useLocalAttributeFilter ? 1 : 0);
   let query = {
-    page,
+    page: targetPage,
     per_page: 100,
     status: "publish",
     orderby: "date",
@@ -2210,51 +2213,90 @@ async function fetchProductRowsPage(page, params = {}) {
     _fields: productFields,
     ...filters.query
   };
-  let result = null;
+  let totalBytes = 0;
+  let processedProducts = 0;
 
-  try {
-    result = await wooRequest("products", { query });
-  } catch (error) {
-    if (!query.search_fields && !query.attribute) throw error;
-    query = { ...query };
-    delete query.search_fields;
-    if (query.attribute) {
-      delete query.attribute;
-      delete query.attribute_term;
-      useLocalAttributeFilter = filters.localAttributeFilter;
+  const requestProductsPage = async (targetRemotePage, baseQuery) => {
+    let nextQuery = { ...baseQuery, page: targetRemotePage };
+    try {
+      return await wooRequest("products", { query: nextQuery });
+    } catch (error) {
+      if (!nextQuery.search_fields && !nextQuery.attribute) throw error;
+      nextQuery = { ...nextQuery };
+      delete nextQuery.search_fields;
+      if (nextQuery.attribute) {
+        delete nextQuery.attribute;
+        delete nextQuery.attribute_term;
+        useLocalAttributeFilter = filters.localAttributeFilter;
+      }
+      return wooRequest("products", { query: nextQuery });
     }
-    result = await wooRequest("products", { query });
-  }
+  };
 
-  const pageRows = await mapLimit(result.data || [], 3, async (product) => {
-    if (product.type === "variable") {
-      const variations = await wooRequest(`products/${product.id}/variations`, {
-        query: { per_page: 100, orderby: "date", order: "desc", _fields: variationFields }
-      });
+  const mapProductsToRows = async (products = []) => {
+    const pageRows = await mapLimit(products, 3, async (product) => {
+      if (product.type === "variable") {
+        const variations = await wooRequest(`products/${product.id}/variations`, {
+          query: { per_page: 100, orderby: "date", order: "desc", _fields: variationFields }
+        });
+        return {
+          rows: (variations.data || []).map((variation) => productRow(product, variation)),
+          bytes: variations.bytes || 0
+        };
+      }
       return {
-        rows: (variations.data || []).map((variation) => productRow(product, variation)),
-        bytes: variations.bytes || 0
+        rows: [productRow(product)],
+        bytes: 0
       };
-    }
-    return {
-      rows: [productRow(product)],
-      bytes: 0
-    };
-  });
-  const unfilteredRows = pageRows.flatMap((item) => item.rows);
-  let rows = unfilteredRows;
-  let filteredLocally = false;
+    });
+    totalBytes += pageRows.reduce((total, item) => total + (item.bytes || 0), 0);
+    return pageRows.flatMap((item) => item.rows);
+  };
+
   if (useLocalAttributeFilter) {
-    rows = filterCachedRows(rows, params);
-    filteredLocally = rows.length !== unfilteredRows.length;
+    const collectedRows = [];
+    let remoteTotal = 0;
+    let totalPages = 1;
+    let remotePage = 1;
+
+    while (remotePage <= totalPages && collectedRows.length < wantedRows) {
+      const result = await requestProductsPage(remotePage, query);
+      remoteTotal = result.total;
+      totalPages = result.totalPages || 1;
+      totalBytes += result.bytes || 0;
+      processedProducts += (result.data || []).length;
+
+      const unfilteredRows = await mapProductsToRows(result.data || []);
+      collectedRows.push(...filterCachedRows(unfilteredRows, params));
+      remotePage += 1;
+    }
+
+    const exhausted = remotePage > totalPages;
+    const start = (targetPage - 1) * pageSize;
+    const rows = collectedRows.slice(start, start + pageSize);
+    const total = exhausted ? collectedRows.length : Math.max(remoteTotal, collectedRows.length);
+
+    return {
+      rows: rows.map((row) => ({ ...row, cachePage: params.cachePage || null })),
+      bytes: totalBytes,
+      processedProducts,
+      total,
+      totalPages: exhausted ? Math.max(Math.ceil(total / pageSize), 1) : Math.max(Math.ceil(total / pageSize), targetPage + 1),
+      remoteTotal
+    };
   }
-  const bytes = (result.bytes || 0) + pageRows.reduce((total, item) => total + (item.bytes || 0), 0);
+
+  let result = await requestProductsPage(targetPage, query);
+  totalBytes += result.bytes || 0;
+  processedProducts += (result.data || []).length;
+
+  const rows = await mapProductsToRows(result.data || []);
 
   return {
     rows: rows.map((row) => ({ ...row, cachePage: params.cachePage || null })),
-    bytes,
-    processedProducts: (result.data || []).length,
-    total: filteredLocally ? rows.length : result.total,
+    bytes: totalBytes,
+    processedProducts,
+    total: result.total,
     totalPages: result.totalPages
   };
 }
