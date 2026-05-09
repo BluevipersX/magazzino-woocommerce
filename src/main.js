@@ -2121,6 +2121,11 @@ async function getAttributeFilterConfig() {
   const languageAttribute = findAttribute(attributes, "lingua") || findAttribute(attributes, "language");
 
   attributeFilterCache = {
+    attributes: attributes.map((attribute) => ({
+      id: attribute.id,
+      name: attribute.name,
+      slug: attribute.slug
+    })),
     set: setAttribute ? {
       id: setAttribute.id,
       name: setAttribute.name,
@@ -2757,12 +2762,14 @@ ipcMain.handle("products:preload-page", async (_event, params = {}) => {
 });
 
 async function updateProductRemote(row) {
-  const body = {
-    regular_price: String(row.regularPrice ?? "").trim(),
-    sale_price: String(row.salePrice ?? "").trim(),
-    manage_stock: true,
-    stock_quantity: row.stockQuantity === "" || row.stockQuantity === null ? null : Number(row.stockQuantity)
-  };
+  const body = {};
+  if (row.regularPrice !== undefined) body.regular_price = String(row.regularPrice ?? "").trim();
+  if (row.salePrice !== undefined) body.sale_price = String(row.salePrice ?? "").trim();
+  if (row.stockQuantity !== undefined) {
+    body.manage_stock = true;
+    body.stock_quantity = row.stockQuantity === "" || row.stockQuantity === null ? null : Number(row.stockQuantity);
+  }
+  if (!Object.keys(body).length) return;
 
   const endpoint = row.parentId
     ? `products/${row.parentId}/variations/${row.id}`
@@ -2773,6 +2780,37 @@ async function updateProductRemote(row) {
     body
   });
   addDiagnostic("products", `Prodotto ${row.parentId ? `${row.parentId}/` : ""}${row.id} salvato.`);
+}
+
+function attributeMatchKey(attribute) {
+  return [
+    String(attribute.id || ""),
+    normalizeSlug(attribute.slug || ""),
+    normalizeSlug(attribute.name || "")
+  ].filter(Boolean);
+}
+
+async function updateProductVariantAttributes(productId, attributeIds = []) {
+  const selected = new Set((attributeIds || []).map((item) => String(item)));
+  const product = await wooRequest(`products/${productId}`, {
+    query: { _fields: "id,attributes" }
+  });
+  const attributes = (product.data.attributes || []).map((attribute) => {
+    const matches = attributeMatchKey(attribute);
+    return {
+      id: attribute.id || 0,
+      name: attribute.id ? undefined : attribute.name,
+      position: attribute.position || 0,
+      visible: attribute.visible !== false,
+      variation: matches.some((key) => selected.has(String(key))),
+      options: attribute.options || []
+    };
+  });
+  await wooRequest(`products/${productId}`, {
+    method: "PUT",
+    body: { attributes }
+  });
+  addDiagnostic("products", `Attributi varianti aggiornati per prodotto ${productId}.`);
 }
 
 async function updateRowsInProductCache(rows) {
@@ -2884,7 +2922,10 @@ ipcMain.handle("products:bulk-update-filtered", async (event, payload = {}) => {
 
   const filters = payload.filters || {};
   const updates = payload.updates || {};
-  if (!Object.keys(updates).length) {
+  const variantAttributes = payload.variantAttributes || {};
+  const shouldUpdateVariantAttributes = Boolean(variantAttributes.enabled);
+  const variantAttributeIds = Array.isArray(variantAttributes.attributeIds) ? variantAttributes.attributeIds : [];
+  if (!Object.keys(updates).length && !shouldUpdateVariantAttributes) {
     throw new Error("Nessun valore da applicare.");
   }
 
@@ -2892,7 +2933,10 @@ ipcMain.handle("products:bulk-update-filtered", async (event, payload = {}) => {
   let matched = 0;
   let saved = 0;
   let failed = 0;
+  let attributeUpdated = 0;
+  let attributeFailed = 0;
   let processedProducts = 0;
+  const touchedParentIds = new Set();
 
   for (let page = 1; page <= totalPages; page += 1) {
     const pageRows = await fetchProductRowsForRemotePage(page, filters);
@@ -2900,7 +2944,9 @@ ipcMain.handle("products:bulk-update-filtered", async (event, payload = {}) => {
     processedProducts += pageRows.processedProducts || 0;
     matched += pageRows.rows.length;
 
-    const rowsToSave = pageRows.rows.map((row) => ({ ...row, ...updates }));
+    const rowsToSave = Object.keys(updates).length
+      ? pageRows.rows.map((row) => ({ ...row, ...updates }))
+      : [];
     const results = await mapLimit(rowsToSave, 2, async (row) => {
       try {
         await updateProductRemote(row);
@@ -2920,6 +2966,24 @@ ipcMain.handle("products:bulk-update-filtered", async (event, payload = {}) => {
       addDiagnostic("cache", `Cache non aggiornata durante bulk filtrati: ${error.message}`);
     }
 
+    if (shouldUpdateVariantAttributes) {
+      const parentIds = Array.from(new Set(pageRows.rows
+        .map((row) => row.parentId || row.id)
+        .filter((id) => id && !touchedParentIds.has(id))));
+      parentIds.forEach((id) => touchedParentIds.add(id));
+      const attributeResults = await mapLimit(parentIds, 2, async (productId) => {
+        try {
+          await updateProductVariantAttributes(productId, variantAttributeIds);
+          return true;
+        } catch (error) {
+          addDiagnostic("products", `Errore attributi varianti prodotto ${productId}: ${error.message}`);
+          return false;
+        }
+      });
+      attributeUpdated += attributeResults.filter(Boolean).length;
+      attributeFailed += attributeResults.filter((ok) => !ok).length;
+    }
+
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("products:bulk-filtered-progress", {
         page,
@@ -2927,11 +2991,13 @@ ipcMain.handle("products:bulk-update-filtered", async (event, payload = {}) => {
         processedProducts,
         matched,
         saved,
-        failed
+        failed,
+        attributeUpdated,
+        attributeFailed
       });
     }
   }
 
-  addDiagnostic("products", `Bulk filtrati completato: ${saved} salvati, ${failed} errori, ${matched} filtrati.`);
-  return { saved, failed, matched, processedProducts };
+  addDiagnostic("products", `Bulk filtrati completato: ${saved} salvati, ${failed} errori, ${matched} filtrati, ${attributeUpdated} attributi prodotti.`);
+  return { saved, failed, matched, processedProducts, attributeUpdated, attributeFailed };
 });

@@ -89,6 +89,8 @@ const els = {
   bulkFilteredSalePrice: document.querySelector("#bulkFilteredSalePrice"),
   bulkFilteredStockQuantity: document.querySelector("#bulkFilteredStockQuantity"),
   bulkFilteredAllResults: document.querySelector("#bulkFilteredAllResults"),
+  bulkUpdateVariantAttributes: document.querySelector("#bulkUpdateVariantAttributes"),
+  bulkVariantAttributes: document.querySelector("#bulkVariantAttributes"),
   bulkFilteredError: document.querySelector("#bulkFilteredError"),
   applyBulkFilteredButton: document.querySelector("#applyBulkFilteredButton"),
   cancelBulkFilteredButton: document.querySelector("#cancelBulkFilteredButton"),
@@ -649,16 +651,24 @@ function renderCategoryTerms(terms = []) {
     .join("");
 }
 
+function renderBulkVariantAttributes(attributes = []) {
+  els.bulkVariantAttributes.innerHTML = attributes
+    .map((attribute) => `<option value="${escapeAttr(attribute.id || attribute.slug || attribute.name)}">${escapeHtml(attribute.name)}</option>`)
+    .join("");
+}
+
 async function loadAttributeFilters() {
   try {
     const filters = await window.magazzino.getAttributeFilters();
     renderTerms(els.setFilter, "Tutti i set", filters.set ? filters.set.terms : []);
     renderTerms(els.languageFilter, "Tutte le lingue", filters.language ? filters.language.terms : []);
     renderCategoryTerms(filters.categories ? filters.categories.terms : []);
+    renderBulkVariantAttributes(filters.attributes || []);
   } catch (error) {
     renderTerms(els.setFilter, "Set non disponibili", []);
     renderTerms(els.languageFilter, "Lingue non disponibili", []);
     renderCategoryTerms([]);
+    renderBulkVariantAttributes([]);
     setStatus(error.message || "Impossibile leggere gli attributi.", "error");
   }
 }
@@ -941,6 +951,11 @@ function openBulkFilteredModal() {
   els.bulkFilteredSalePrice.value = "";
   els.bulkFilteredStockQuantity.value = "";
   els.bulkFilteredAllResults.checked = true;
+  els.bulkUpdateVariantAttributes.checked = false;
+  els.bulkVariantAttributes.disabled = true;
+  Array.from(els.bulkVariantAttributes.options).forEach((option) => {
+    option.selected = false;
+  });
   els.bulkFilteredError.hidden = true;
   els.bulkFilteredError.textContent = "";
   els.bulkFilteredSummary.textContent = `${state.rows.length} prodotti sono visibili in questa pagina. Puoi applicare i valori alla pagina oppure a tutti i risultati filtrati.`;
@@ -959,18 +974,25 @@ async function applyBulkFilteredChanges() {
   const regularPrice = els.bulkFilteredRegularPrice.value.trim();
   const salePrice = els.bulkFilteredSalePrice.value.trim();
   const stockQuantity = els.bulkFilteredStockQuantity.value.trim();
+  const variantAttributeIds = Array.from(els.bulkVariantAttributes.selectedOptions || []).map((option) => option.value);
+  const shouldUpdateVariantAttributes = els.bulkUpdateVariantAttributes.checked;
 
   if (regularPrice !== "") updates.regularPrice = regularPrice;
   if (salePrice !== "") updates.salePrice = salePrice;
   if (stockQuantity !== "") updates.stockQuantity = stockQuantity;
 
-  if (!Object.keys(updates).length) {
+  if (!Object.keys(updates).length && !shouldUpdateVariantAttributes) {
     els.bulkFilteredError.textContent = "Inserisci almeno un valore da applicare.";
     els.bulkFilteredError.hidden = false;
     return;
   }
   if (updates.stockQuantity !== undefined && !Number.isInteger(Number(updates.stockQuantity))) {
     els.bulkFilteredError.textContent = "La quantita deve essere un numero intero.";
+    els.bulkFilteredError.hidden = false;
+    return;
+  }
+  if (shouldUpdateVariantAttributes && !els.bulkFilteredAllResults.checked) {
+    els.bulkFilteredError.textContent = "Gli attributi varianti si aggiornano sui prodotti padre: usa Tutti i risultati filtrati.";
     els.bulkFilteredError.hidden = false;
     return;
   }
@@ -983,9 +1005,13 @@ async function applyBulkFilteredChanges() {
     try {
       const result = await window.magazzino.updateFilteredProducts({
         filters: currentProductParams(1),
-        updates
+        updates,
+        variantAttributes: shouldUpdateVariantAttributes
+          ? { enabled: true, attributeIds: variantAttributeIds }
+          : { enabled: false, attributeIds: [] }
       });
-      setStatus(`${result.saved} salvati, ${result.failed} non salvati su ${result.matched} prodotti filtrati. Aggiorno la ricerca...`, result.failed ? "error" : "ok");
+      const attributeText = result.attributeUpdated ? `, ${result.attributeUpdated} prodotti padre attributi` : "";
+      setStatus(`${result.saved} salvati, ${result.failed} non salvati su ${result.matched} prodotti filtrati${attributeText}. Aggiorno la ricerca...`, result.failed || result.attributeFailed ? "error" : "ok");
       await loadProducts(1);
     } catch (error) {
       setStatus(error.message || "Modifica bulk filtrati non riuscita.", "error");
@@ -1233,6 +1259,9 @@ els.importCsvModal.addEventListener("click", (event) => {
 els.bulkFilteredButton.addEventListener("click", openBulkFilteredModal);
 els.applyBulkFilteredButton.addEventListener("click", applyBulkFilteredChanges);
 els.cancelBulkFilteredButton.addEventListener("click", closeBulkFilteredModal);
+els.bulkUpdateVariantAttributes.addEventListener("change", () => {
+  els.bulkVariantAttributes.disabled = !els.bulkUpdateVariantAttributes.checked;
+});
 els.bulkFilteredModal.addEventListener("click", (event) => {
   if (event.target === els.bulkFilteredModal) closeBulkFilteredModal();
 });
@@ -1372,7 +1401,8 @@ window.magazzino.onImagesCleared(() => {
 });
 window.magazzino.onBulkFilteredProgress((payload) => {
   if (!state.savingBulk) return;
-  setStatus(`Bulk filtrati: pagina ${payload.page}/${payload.totalPages}, ${payload.matched} trovati, ${payload.saved} salvati, ${payload.failed} errori.`);
+  const attributeText = payload.attributeUpdated ? `, ${payload.attributeUpdated} attributi padre` : "";
+  setStatus(`Bulk filtrati: pagina ${payload.page}/${payload.totalPages}, ${payload.matched} trovati, ${payload.saved} salvati, ${payload.failed} errori${attributeText}.`);
 });
 window.magazzino.onWindowMaximized((isMaximized) => {
   els.maximizeButton.textContent = isMaximized ? "[_]" : "[ ]";

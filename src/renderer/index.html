@@ -338,6 +338,14 @@
             <input id="bulkFilteredStockQuantity" type="number" step="1" inputmode="numeric" />
           </label>
         </div>
+        <label class="checkFilter bulkScopeFilter">
+          <input id="bulkUpdateVariantAttributes" type="checkbox" />
+          Aggiorna attributi varianti
+        </label>
+        <label class="compactField">
+          Attributi che generano varianti
+          <select id="bulkVariantAttributes" multiple size="5" disabled></select>
+        </label>
         <div id="bulkFilteredError" class="settingsHint errorText" hidden></div>
         <div class="buttonRow">
           <button id="applyBulkFilteredButton" type="button">Applica modifiche</button>
