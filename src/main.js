@@ -1741,8 +1741,18 @@ function normalizeCsvList(value) {
 
 function normalizeVariantAttributeIds(value) {
   return normalizeCsvList(value)
+    .flatMap((item) => String(item || "").split(/[|,;]/))
     .flatMap((item) => [String(item || ""), normalizeSlug(item)])
     .filter(Boolean);
+}
+
+function normalizeVariantAttributeGroups(value) {
+  return normalizeCsvList(value)
+    .map((item) => String(item || "")
+      .split(/[|,;]/)
+      .flatMap((token) => [String(token || ""), normalizeSlug(token)])
+      .filter(Boolean))
+    .filter((group) => group.length);
 }
 
 function decimalFilterValue(value) {
@@ -1822,12 +1832,12 @@ function rowMatchesFilters(row, filters = {}) {
   const setTerm = normalizeSlug(filters.setTerm);
   const languageTerm = normalizeSlug(filters.languageTerm);
   const categoryIds = normalizeCsvList(filters.categoryIds);
-  const variantAttributeIds = normalizeVariantAttributeIds(filters.variantAttributeIds);
+  const variantAttributeGroups = normalizeVariantAttributeGroups(filters.variantAttributeIds);
   const hasAttribute = (key, term) => !term || row.attributes.some((attr) => attr.key === key && attr.term === term);
   const hasCategories = !categoryIds.length || categoryIds.every((categoryId) => productCategoryTerms(row).includes(`|${categoryId}|`));
   const variantKeys = row.variantAttributeKeys || productVariantAttributeKeys(row);
-  const hasVariantAttributes = !variantAttributeIds.length
-    || variantAttributeIds.every((attributeId) => variantKeys.includes(`|${attributeId}|`));
+  const hasVariantAttributes = !variantAttributeGroups.length
+    || variantAttributeGroups.every((group) => group.some((attributeId) => variantKeys.includes(`|${attributeId}|`)));
 
   const hasLanguage = !languageTerm
     || hasAttribute("lingua", languageTerm)
@@ -1947,6 +1957,7 @@ function localProductResultFromDb(cache, params = {}) {
   const languageTerm = normalizeSlug(params.languageTerm);
   const categoryIds = normalizeCsvList(params.categoryIds);
   const variantAttributeIds = normalizeVariantAttributeIds(params.variantAttributeIds);
+  const variantAttributeGroups = normalizeVariantAttributeGroups(params.variantAttributeIds);
   const priceMin = decimalFilterValue(params.priceMin);
   const priceMax = decimalFilterValue(params.priceMax);
   const quantityMin = decimalFilterValue(params.quantityMin);
@@ -1993,9 +2004,14 @@ function localProductResultFromDb(cache, params = {}) {
       where.push(`category_terms LIKE @category${index} ESCAPE '\\'`);
       bindings[`category${index}`] = `%|${String(categoryId).replace(/[\\%_]/g, (char) => `\\${char}`)}|%`;
     });
-    variantAttributeIds.forEach((attributeId, index) => {
-      where.push(`variant_attribute_keys LIKE @variantAttribute${index} ESCAPE '\\'`);
-      bindings[`variantAttribute${index}`] = `%|${String(attributeId).replace(/[\\%_]/g, (char) => `\\${char}`)}|%`;
+    variantAttributeGroups.forEach((group, groupIndex) => {
+      const clauses = [];
+      group.forEach((attributeId, tokenIndex) => {
+        const key = `variantAttribute${groupIndex}_${tokenIndex}`;
+        clauses.push(`variant_attribute_keys LIKE @${key} ESCAPE '\\'`);
+        bindings[key] = `%|${String(attributeId).replace(/[\\%_]/g, (char) => `\\${char}`)}|%`;
+      });
+      if (clauses.length) where.push(`(${clauses.join(" OR ")})`);
     });
     if (missingPrice) {
       where.push("(regular_price IS NULL OR regular_price = '')");

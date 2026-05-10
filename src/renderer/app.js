@@ -669,7 +669,10 @@ function renderBulkVariantAttributes(attributes = []) {
 
 function renderVariantAttributeFilter(attributes = []) {
   els.variantAttributeFilter.innerHTML = attributes
-    .map((attribute) => `<option value="${escapeAttr(attribute.id || attribute.slug || attribute.name)}">${escapeHtml(attribute.name)}</option>`)
+    .map((attribute) => {
+      const value = [attribute.id, attribute.slug, attribute.name].filter(Boolean).join("|");
+      return `<option value="${escapeAttr(value)}">${escapeHtml(attribute.name)}</option>`;
+    })
     .join("");
 }
 
