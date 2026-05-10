@@ -76,6 +76,7 @@ const els = {
   languageFilter: document.querySelector("#languageFilter"),
   stockFilter: document.querySelector("#stockFilter"),
   categoryFilter: document.querySelector("#categoryFilter"),
+  variantAttributeFilter: document.querySelector("#variantAttributeFilter"),
   priceMinInput: document.querySelector("#priceMinInput"),
   priceMaxInput: document.querySelector("#priceMaxInput"),
   missingPriceFilter: document.querySelector("#missingPriceFilter"),
@@ -296,6 +297,12 @@ function selectedCategoryIds() {
     .filter(Boolean);
 }
 
+function selectedVariantAttributeIds() {
+  return Array.from(els.variantAttributeFilter.selectedOptions || [])
+    .map((option) => option.value)
+    .filter(Boolean);
+}
+
 function hasActiveFilters() {
   return Boolean(
     els.searchInput.value.trim()
@@ -303,6 +310,7 @@ function hasActiveFilters() {
       || els.languageFilter.value
       || els.stockFilter.value
       || selectedCategoryIds().length
+      || selectedVariantAttributeIds().length
       || els.priceMinInput.value.trim()
       || els.priceMaxInput.value.trim()
       || els.missingPriceFilter.checked
@@ -322,6 +330,7 @@ function syncExclusiveFilterInputs() {
 function hasHeavyRemoteFilter() {
   return Boolean(
     selectedCategoryIds().length
+      || selectedVariantAttributeIds().length
       || els.setFilter.value
       || els.languageFilter.value
       || els.stockFilter.value
@@ -342,6 +351,7 @@ function currentProductParams(page = state.page) {
     languageTerm: els.languageFilter.value,
     stockStatus: els.stockFilter.value,
     categoryIds: selectedCategoryIds(),
+    variantAttributeIds: selectedVariantAttributeIds(),
     priceMin: els.priceMinInput.value,
     priceMax: els.priceMaxInput.value,
     missingPrice: els.missingPriceFilter.checked,
@@ -657,17 +667,25 @@ function renderBulkVariantAttributes(attributes = []) {
     .join("");
 }
 
+function renderVariantAttributeFilter(attributes = []) {
+  els.variantAttributeFilter.innerHTML = attributes
+    .map((attribute) => `<option value="${escapeAttr(attribute.id || attribute.slug || attribute.name)}">${escapeHtml(attribute.name)}</option>`)
+    .join("");
+}
+
 async function loadAttributeFilters() {
   try {
     const filters = await window.magazzino.getAttributeFilters();
     renderTerms(els.setFilter, "Tutti i set", filters.set ? filters.set.terms : []);
     renderTerms(els.languageFilter, "Tutte le lingue", filters.language ? filters.language.terms : []);
     renderCategoryTerms(filters.categories ? filters.categories.terms : []);
+    renderVariantAttributeFilter(filters.attributes || []);
     renderBulkVariantAttributes(filters.attributes || []);
   } catch (error) {
     renderTerms(els.setFilter, "Set non disponibili", []);
     renderTerms(els.languageFilter, "Lingue non disponibili", []);
     renderCategoryTerms([]);
+    renderVariantAttributeFilter([]);
     renderBulkVariantAttributes([]);
     setStatus(error.message || "Impossibile leggere gli attributi.", "error");
   }
@@ -1311,6 +1329,7 @@ els.stockFilter.addEventListener("change", () => loadProducts(1));
 els.setFilter.addEventListener("change", () => loadProducts(1));
 els.languageFilter.addEventListener("change", () => loadProducts(1));
 els.categoryFilter.addEventListener("change", () => loadProducts(1));
+els.variantAttributeFilter.addEventListener("change", () => loadProducts(1));
 [
   els.priceMinInput,
   els.priceMaxInput,

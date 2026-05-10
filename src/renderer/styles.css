@@ -354,7 +354,7 @@ main {
 .advancedFilters {
   display: grid;
   grid-column: 2;
-  grid-template-columns: minmax(180px, 1.25fr) repeat(2, minmax(94px, 0.7fr)) minmax(116px, auto) repeat(2, minmax(94px, 0.7fr)) minmax(126px, auto) minmax(136px, auto);
+  grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) repeat(2, minmax(82px, 0.6fr)) minmax(108px, auto) repeat(2, minmax(82px, 0.6fr)) minmax(118px, auto) minmax(128px, auto);
   align-items: end;
   gap: 10px;
   width: min(1020px, 100%);
