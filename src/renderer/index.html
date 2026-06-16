@@ -54,6 +54,12 @@
 
     <div class="appShell">
       <main>
+        <nav class="dashboardTabs" aria-label="Dashboard">
+          <button id="productsTabButton" class="active" type="button">Prodotti</button>
+          <button id="ordersTabButton" type="button">Ordini</button>
+        </nav>
+
+        <section id="productsDashboard" class="dashboardPanel active" aria-label="Dashboard prodotti">
         <header class="toolbar">
           <div>
             <p class="eyebrow">Prodotti e varianti</p>
@@ -172,6 +178,65 @@
         </section>
 
         <section id="gridShell" class="gridShell" aria-label="Prodotti in griglia"></section>
+        </section>
+
+        <section id="ordersDashboard" class="dashboardPanel ordersDashboard" aria-label="Dashboard ordini" hidden>
+          <header class="toolbar ordersToolbar">
+            <div>
+              <p class="eyebrow">Ordini WooCommerce</p>
+              <h2>Riepilogo ordini</h2>
+            </div>
+            <div class="orderFilters">
+              <input id="orderSearchInput" type="search" placeholder="Cerca ordine o cliente" />
+              <select id="orderStatusFilter">
+                <option value="">Tutti gli stati</option>
+                <option value="pending">In attesa</option>
+                <option value="processing">In lavorazione</option>
+                <option value="on-hold">In sospeso</option>
+                <option value="completed">Completati</option>
+                <option value="cancelled">Annullati</option>
+                <option value="refunded">Rimborsati</option>
+                <option value="failed">Falliti</option>
+              </select>
+              <button id="refreshOrdersButton" type="button">Aggiorna ordini</button>
+            </div>
+          </header>
+
+          <section class="ordersStatusbar">
+            <span id="ordersStatusText">Apri la tab per caricare gli ordini.</span>
+            <div class="pagerControls">
+              <button id="ordersPrevButton" class="secondary" type="button">Indietro</button>
+              <span id="ordersPageText">Pagina 1</span>
+              <button id="ordersNextButton" class="secondary" type="button">Avanti</button>
+            </div>
+          </section>
+
+          <section class="ordersLayout">
+            <div class="tableShell ordersTableShell">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Ordine</th>
+                    <th>Data</th>
+                    <th>Cliente</th>
+                    <th>Stato</th>
+                    <th>Totale</th>
+                    <th>Prodotti</th>
+                  </tr>
+                </thead>
+                <tbody id="ordersBody">
+                  <tr>
+                    <td colspan="6" class="empty">Nessun ordine caricato.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <aside id="orderDetails" class="orderDetails">
+              <div class="emptyOrderDetails">Seleziona un ordine per vedere dettagli e prodotti acquistati.</div>
+            </aside>
+          </section>
+        </section>
       </main>
     </div>
 

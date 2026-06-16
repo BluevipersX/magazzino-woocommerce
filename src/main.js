@@ -2814,6 +2814,79 @@ ipcMain.handle("products:list", async (_event, params = {}) => {
   return localResult;
 });
 
+function orderCustomerName(order = {}) {
+  const billing = order.billing || {};
+  return [billing.first_name, billing.last_name].filter(Boolean).join(" ").trim()
+    || billing.company
+    || order.billing_email
+    || "Cliente non indicato";
+}
+
+function normalizeOrder(order = {}) {
+  const billing = order.billing || {};
+  const shipping = order.shipping || {};
+  const lineItems = Array.isArray(order.line_items) ? order.line_items : [];
+  return {
+    id: order.id,
+    number: order.number || String(order.id || ""),
+    status: order.status || "",
+    dateCreated: order.date_created || order.date_created_gmt || "",
+    customerName: orderCustomerName(order),
+    email: billing.email || "",
+    phone: billing.phone || "",
+    paymentMethod: order.payment_method_title || order.payment_method || "",
+    currency: order.currency || "EUR",
+    total: order.total || "0.00",
+    shippingTotal: order.shipping_total || "0.00",
+    discountTotal: order.discount_total || "0.00",
+    billingAddress: [billing.address_1, billing.address_2, billing.postcode, billing.city, billing.state, billing.country]
+      .filter(Boolean)
+      .join(", "),
+    shippingAddress: [shipping.address_1, shipping.address_2, shipping.postcode, shipping.city, shipping.state, shipping.country]
+      .filter(Boolean)
+      .join(", "),
+    items: lineItems.map((item) => ({
+      id: item.id,
+      productId: item.product_id,
+      variationId: item.variation_id,
+      name: item.name || "",
+      sku: item.sku || "",
+      quantity: item.quantity || 0,
+      total: item.total || "0.00",
+      price: item.price === null || item.price === undefined ? "" : String(item.price),
+      meta: (item.meta_data || [])
+        .filter((meta) => meta && meta.display_key && meta.display_value)
+        .map((meta) => `${meta.display_key}: ${meta.display_value}`)
+    }))
+  };
+}
+
+ipcMain.handle("orders:list", async (_event, params = {}) => {
+  const page = Math.max(Number(params.page || 1), 1);
+  const status = String(params.status || "").trim();
+  const search = String(params.search || "").trim();
+  const query = {
+    page,
+    per_page: 50,
+    orderby: "date",
+    order: "desc",
+    status: status || "any",
+    _fields: "id,number,status,date_created,date_created_gmt,billing,shipping,currency,total,shipping_total,discount_total,payment_method,payment_method_title,line_items"
+  };
+  if (search) query.search = search;
+
+  const startedAt = Date.now();
+  const result = await wooRequest("orders", { query });
+  const rows = (result.data || []).map(normalizeOrder);
+  addDiagnostic("orders", `Ordini pagina ${page}: ${rows.length}/${result.total} in ${Date.now() - startedAt}ms.`);
+  return {
+    rows,
+    page,
+    total: result.total,
+    totalPages: result.totalPages || 1
+  };
+});
+
 ipcMain.handle("products:preload-page", async (_event, params = {}) => {
   const page = Math.max(Number(params.page || 1), 1);
   const key = String(page);

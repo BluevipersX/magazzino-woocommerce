@@ -5,6 +5,14 @@ const state = {
   loading: false,
   cacheSyncing: false,
   savingBulk: false,
+  activeDashboard: "products",
+  orders: [],
+  orderPage: 1,
+  orderTotalPages: 1,
+  ordersLoaded: false,
+  ordersLoading: false,
+  selectedOrderId: null,
+  orderSearchTimer: null,
   requestId: 0,
   searchTimer: null,
   dirtyRows: new Map(),
@@ -21,6 +29,10 @@ const els = {
   menuUpdateButton: document.querySelector("#menuUpdateButton"),
   menuExportCsvButton: document.querySelector("#menuExportCsvButton"),
   menuImportCsvButton: document.querySelector("#menuImportCsvButton"),
+  productsTabButton: document.querySelector("#productsTabButton"),
+  ordersTabButton: document.querySelector("#ordersTabButton"),
+  productsDashboard: document.querySelector("#productsDashboard"),
+  ordersDashboard: document.querySelector("#ordersDashboard"),
   listViewButton: document.querySelector("#listViewButton"),
   gridViewButton: document.querySelector("#gridViewButton"),
   inlineListViewButton: document.querySelector("#inlineListViewButton"),
@@ -116,7 +128,16 @@ const els = {
   cacheOverlayText: document.querySelector("#cacheOverlayText"),
   productBody: document.querySelector("#productBody"),
   tableShell: document.querySelector(".tableShell"),
-  gridShell: document.querySelector("#gridShell")
+  gridShell: document.querySelector("#gridShell"),
+  orderSearchInput: document.querySelector("#orderSearchInput"),
+  orderStatusFilter: document.querySelector("#orderStatusFilter"),
+  refreshOrdersButton: document.querySelector("#refreshOrdersButton"),
+  ordersStatusText: document.querySelector("#ordersStatusText"),
+  ordersPrevButton: document.querySelector("#ordersPrevButton"),
+  ordersNextButton: document.querySelector("#ordersNextButton"),
+  ordersPageText: document.querySelector("#ordersPageText"),
+  ordersBody: document.querySelector("#ordersBody"),
+  orderDetails: document.querySelector("#orderDetails")
 };
 
 function setStatus(message, tone = "normal") {
@@ -156,6 +177,20 @@ function setProductView(view) {
   els.listViewButton.textContent = nextView === "list" ? "Vista elenco attiva" : "Vista elenco";
   els.gridViewButton.textContent = nextView === "grid" ? "Vista griglia attiva" : "Vista griglia";
   renderRows();
+}
+
+function switchDashboard(dashboard) {
+  const nextDashboard = dashboard === "orders" ? "orders" : "products";
+  state.activeDashboard = nextDashboard;
+  els.productsDashboard.hidden = nextDashboard !== "products";
+  els.ordersDashboard.hidden = nextDashboard !== "orders";
+  els.productsDashboard.classList.toggle("active", nextDashboard === "products");
+  els.ordersDashboard.classList.toggle("active", nextDashboard === "orders");
+  els.productsTabButton.classList.toggle("active", nextDashboard === "products");
+  els.ordersTabButton.classList.toggle("active", nextDashboard === "orders");
+  if (nextDashboard === "orders" && hasConfig() && !state.ordersLoaded) {
+    loadOrders(1);
+  }
 }
 
 function hasConfig() {
@@ -632,6 +667,171 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value).replace(/`/g, "&#096;");
+}
+
+function orderStatusLabel(status) {
+  const labels = {
+    pending: "In attesa",
+    processing: "In lavorazione",
+    "on-hold": "In sospeso",
+    completed: "Completato",
+    cancelled: "Annullato",
+    refunded: "Rimborsato",
+    failed: "Fallito"
+  };
+  return labels[status] || status || "-";
+}
+
+function formatOrderDate(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString("it-IT", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function formatOrderMoney(value, currency = "EUR") {
+  const number = Number(String(value ?? "0").replace(",", "."));
+  if (!Number.isFinite(number)) return `${value || "0.00"} ${currency}`;
+  return new Intl.NumberFormat("it-IT", { style: "currency", currency }).format(number);
+}
+
+function orderItemsCount(order) {
+  return (order.items || []).reduce((total, item) => total + Number(item.quantity || 0), 0);
+}
+
+function renderOrderDetails(order) {
+  if (!order) {
+    els.orderDetails.innerHTML = `<div class="emptyOrderDetails">Seleziona un ordine per vedere dettagli e prodotti acquistati.</div>`;
+    return;
+  }
+
+  const items = order.items || [];
+  els.orderDetails.innerHTML = `
+    <div class="orderDetailHeader">
+      <div>
+        <p class="eyebrow">Ordine #${escapeHtml(order.number)}</p>
+        <h3>${escapeHtml(order.customerName)}</h3>
+      </div>
+      <span class="badge orderStatus ${escapeAttr(order.status)}">${escapeHtml(orderStatusLabel(order.status))}</span>
+    </div>
+    <div class="orderFacts">
+      <div><span>Data</span><strong>${escapeHtml(formatOrderDate(order.dateCreated))}</strong></div>
+      <div><span>Totale</span><strong>${escapeHtml(formatOrderMoney(order.total, order.currency))}</strong></div>
+      <div><span>Prodotti</span><strong>${escapeHtml(orderItemsCount(order))}</strong></div>
+      <div><span>Pagamento</span><strong>${escapeHtml(order.paymentMethod || "-")}</strong></div>
+    </div>
+    <div class="orderContact">
+      <div>
+        <span>Email</span>
+        <strong>${escapeHtml(order.email || "-")}</strong>
+      </div>
+      <div>
+        <span>Telefono</span>
+        <strong>${escapeHtml(order.phone || "-")}</strong>
+      </div>
+      <div>
+        <span>Spedizione</span>
+        <strong>${escapeHtml(order.shippingAddress || order.billingAddress || "-")}</strong>
+      </div>
+    </div>
+    <div class="orderItems">
+      <h3>Prodotti acquistati</h3>
+      ${
+        items.length
+          ? items.map((item) => `
+            <article class="orderItem">
+              <div>
+                <strong>${escapeHtml(item.name)}</strong>
+                <span>SKU ${escapeHtml(item.sku || "-")} - ID ${escapeHtml(item.productId || "-")}${item.variationId ? ` / Variante ${escapeHtml(item.variationId)}` : ""}</span>
+                ${item.meta && item.meta.length ? `<small>${escapeHtml(item.meta.join(" - "))}</small>` : ""}
+              </div>
+              <div class="orderItemTotals">
+                <span>x${escapeHtml(item.quantity || 0)}</span>
+                <strong>${escapeHtml(formatOrderMoney(item.total, order.currency))}</strong>
+              </div>
+            </article>
+          `).join("")
+          : `<div class="emptyOrderDetails">Nessun prodotto nell'ordine.</div>`
+      }
+    </div>
+  `;
+}
+
+function renderOrders() {
+  els.ordersPageText.textContent = `Pagina ${state.orderPage} di ${Math.max(state.orderTotalPages, 1)}`;
+  els.ordersPrevButton.disabled = state.ordersLoading || state.orderPage <= 1;
+  els.ordersNextButton.disabled = state.ordersLoading || state.orderPage >= state.orderTotalPages;
+
+  if (!state.orders.length) {
+    els.ordersBody.innerHTML = `<tr><td colspan="6" class="empty">Nessun ordine trovato.</td></tr>`;
+    renderOrderDetails(null);
+    return;
+  }
+
+  if (!state.selectedOrderId || !state.orders.some((order) => order.id === state.selectedOrderId)) {
+    state.selectedOrderId = state.orders[0].id;
+  }
+
+  els.ordersBody.innerHTML = state.orders.map((order) => `
+    <tr class="orderRow ${order.id === state.selectedOrderId ? "selected" : ""}" data-order-id="${escapeAttr(order.id)}">
+      <td>
+        <div class="productName tableProductName">#${escapeHtml(order.number)}</div>
+        <div class="subtle">ID ${escapeHtml(order.id)}</div>
+      </td>
+      <td>${escapeHtml(formatOrderDate(order.dateCreated))}</td>
+      <td>
+        <div class="productName tableProductName">${escapeHtml(order.customerName)}</div>
+        <div class="subtle">${escapeHtml(order.email || "-")}</div>
+      </td>
+      <td><span class="badge orderStatus ${escapeAttr(order.status)}">${escapeHtml(orderStatusLabel(order.status))}</span></td>
+      <td>${escapeHtml(formatOrderMoney(order.total, order.currency))}</td>
+      <td>${escapeHtml(orderItemsCount(order))}</td>
+    </tr>
+  `).join("");
+
+  renderOrderDetails(state.orders.find((order) => order.id === state.selectedOrderId));
+}
+
+function currentOrderParams(page = state.orderPage) {
+  return {
+    page,
+    search: els.orderSearchInput.value,
+    status: els.orderStatusFilter.value
+  };
+}
+
+async function loadOrders(page = state.orderPage) {
+  if (!hasConfig()) {
+    els.ordersStatusText.textContent = "Configura WooCommerce per caricare gli ordini.";
+    return;
+  }
+  state.ordersLoading = true;
+  els.ordersStatusText.textContent = "Caricamento ordini...";
+  renderOrders();
+  try {
+    const result = await window.magazzino.listOrders(currentOrderParams(page));
+    state.orders = result.rows || [];
+    state.orderPage = result.page || page;
+    state.orderTotalPages = result.totalPages || 1;
+    state.ordersLoaded = true;
+    state.selectedOrderId = state.orders[0] ? state.orders[0].id : null;
+    els.ordersStatusText.textContent = `${result.total || 0} ordini trovati, ${state.orders.length} caricati.`;
+  } catch (error) {
+    els.ordersStatusText.textContent = error.message || "Impossibile caricare gli ordini.";
+  } finally {
+    state.ordersLoading = false;
+    renderOrders();
+  }
+}
+
+function scheduleOrderSearch() {
+  clearTimeout(state.orderSearchTimer);
+  state.orderSearchTimer = setTimeout(() => loadOrders(1), 350);
 }
 
 async function loadConfig() {
@@ -1126,6 +1326,7 @@ els.configForm.addEventListener("submit", async (event) => {
     await saveConfig();
     await loadAttributeFilters();
     await loadProducts(1);
+    if (state.activeDashboard === "orders") await loadOrders(1);
   } catch (error) {
     setStatus(error.message || "Errore configurazione.", "error");
   }
@@ -1263,6 +1464,26 @@ document.addEventListener("keydown", (event) => {
 
 els.refreshButton.addEventListener("click", () => loadProducts(1));
 els.menuRefreshButton.addEventListener("click", () => loadProducts(1));
+els.productsTabButton.addEventListener("click", () => switchDashboard("products"));
+els.ordersTabButton.addEventListener("click", () => switchDashboard("orders"));
+els.refreshOrdersButton.addEventListener("click", () => loadOrders(1));
+els.ordersPrevButton.addEventListener("click", () => loadOrders(state.orderPage - 1));
+els.ordersNextButton.addEventListener("click", () => loadOrders(state.orderPage + 1));
+els.orderStatusFilter.addEventListener("change", () => loadOrders(1));
+els.orderSearchInput.addEventListener("input", scheduleOrderSearch);
+els.orderSearchInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    loadOrders(1);
+    els.orderSearchInput.blur();
+  }
+});
+els.ordersBody.addEventListener("click", (event) => {
+  const row = event.target.closest("tr[data-order-id]");
+  if (!row) return;
+  state.selectedOrderId = Number(row.dataset.orderId);
+  renderOrders();
+});
 els.menuExportCsvButton.addEventListener("click", exportCsv);
 els.menuImportCsvButton.addEventListener("click", importCsv);
 els.closeImportCsvButton.addEventListener("click", closeImportCsv);

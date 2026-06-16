@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("magazzino", {
   updateProduct: (row, previousRow) => ipcRenderer.invoke("products:update", row, previousRow),
   updateProducts: (rows) => ipcRenderer.invoke("products:bulk-update", rows),
   updateFilteredProducts: (payload) => ipcRenderer.invoke("products:bulk-update-filtered", payload),
+  listOrders: (params) => ipcRenderer.invoke("orders:list", params),
   getUpdateState: () => ipcRenderer.invoke("updates:state"),
   checkForUpdates: () => ipcRenderer.invoke("updates:check"),
   getCacheStatus: () => ipcRenderer.invoke("cache:status"),

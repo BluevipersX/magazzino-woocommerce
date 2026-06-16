@@ -321,6 +321,40 @@ main {
   overflow: hidden;
   padding: 20px;
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+}
+
+.dashboardTabs {
+  display: inline-flex;
+  width: fit-content;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.dashboardTabs button {
+  height: 30px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-soft);
+}
+
+.dashboardTabs button.active {
+  background: var(--color-primary);
+  color: var(--color-text-inverse);
+}
+
+.dashboardPanel {
+  min-width: 0;
+  min-height: 0;
+  display: none;
+}
+
+.dashboardPanel.active {
+  display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 12px;
 }
@@ -721,6 +755,183 @@ tr.dirty td:first-child {
   display: grid;
 }
 
+.ordersToolbar {
+  align-items: center;
+}
+
+.orderFilters {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) 170px 140px;
+  gap: 10px;
+  width: min(620px, 100%);
+}
+
+.ordersStatusbar {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--color-text-soft);
+}
+
+.ordersLayout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(520px, 1.1fr) minmax(340px, 0.9fr);
+  gap: 14px;
+}
+
+.ordersTableShell {
+  min-width: 0;
+}
+
+.ordersTableShell table {
+  min-width: 760px;
+}
+
+.orderRow {
+  cursor: pointer;
+}
+
+.orderRow:hover,
+.orderRow.selected {
+  background: rgba(166, 119, 47, 0.12);
+}
+
+.orderRow.selected td:first-child {
+  box-shadow: inset 3px 0 0 var(--color-primary);
+}
+
+.orderDetails {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.emptyOrderDetails {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-soft);
+  text-align: center;
+}
+
+.orderDetailHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.orderFacts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.orderFacts div,
+.orderContact div {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-primary) 5%, var(--color-surface));
+}
+
+.orderFacts span,
+.orderContact span {
+  color: var(--color-text-soft);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.orderFacts strong,
+.orderContact strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.orderContact {
+  display: grid;
+  gap: 10px;
+}
+
+.orderItems {
+  display: grid;
+  gap: 10px;
+}
+
+.orderItems h3 {
+  font-size: 16px;
+}
+
+.orderItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-input-bg);
+}
+
+.orderItem div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.orderItem strong {
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.orderItem span,
+.orderItem small {
+  color: var(--color-text-soft);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.orderItemTotals {
+  display: grid;
+  justify-items: end;
+  align-content: start;
+  gap: 4px;
+}
+
+.orderStatus.completed {
+  background: rgba(46, 204, 113, 0.16);
+  color: var(--color-success);
+}
+
+.orderStatus.cancelled,
+.orderStatus.failed,
+.orderStatus.refunded {
+  background: rgba(201, 45, 45, 0.14);
+  color: var(--color-error);
+}
+
+.orderStatus.pending,
+.orderStatus.on-hold {
+  background: rgba(243, 156, 18, 0.16);
+  color: var(--color-warning);
+}
+
 .cacheOverlay {
   position: fixed;
   inset: 78px 0 0;
@@ -1037,6 +1248,12 @@ tr.dirty td:first-child {
 
   .advancedFilters,
   .bulkFilteredFields {
+    grid-template-columns: 1fr;
+  }
+
+  .orderFilters,
+  .ordersLayout,
+  .orderFacts {
     grid-template-columns: 1fr;
   }
 
