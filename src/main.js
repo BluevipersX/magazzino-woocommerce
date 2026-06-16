@@ -1524,6 +1524,10 @@ async function wooRequest(pathname, options = {}) {
       if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, value);
     });
   }
+  if (options.authInQuery) {
+    url.searchParams.set("consumer_key", config.consumerKey);
+    url.searchParams.set("consumer_secret", config.consumerSecret);
+  }
 
   const method = options.method || "GET";
   const retries = options.retries ?? (method === "GET" ? 4 : 1);
@@ -1537,7 +1541,9 @@ async function wooRequest(pathname, options = {}) {
       const response = await fetch(url, {
         method,
         headers: {
-          Authorization: authHeader(config),
+          ...(options.authInQuery ? {} : { Authorization: authHeader(config) }),
+          Accept: "application/json, text/plain;q=0.9, */*;q=0.8",
+          "User-Agent": "Magazzino-WooCommerce/1.0 (+WooCommerce REST API)",
           "Content-Type": "application/json"
         },
         body: options.body ? JSON.stringify(options.body) : undefined,
@@ -2896,17 +2902,25 @@ function orderRowsFromResponse(data) {
 }
 
 async function fetchOrdersWithFallback(query) {
-  const result = await wooRequest("orders", { query });
-  try {
-    return { ...result, rows: orderRowsFromResponse(result.data) };
-  } catch (error) {
-    if (!query._fields) throw error;
-    addDiagnostic("orders", `Retry ordini senza _fields: ${error.message}`);
-    const fallbackQuery = { ...query };
-    delete fallbackQuery._fields;
-    const fallback = await wooRequest("orders", { query: fallbackQuery });
-    return { ...fallback, rows: orderRowsFromResponse(fallback.data) };
+  const attempts = [
+    { label: "standard", query, options: {} },
+    { label: "senza _fields", query: { ...query, _fields: undefined }, options: {} },
+    { label: "auth query", query, options: { authInQuery: true } },
+    { label: "auth query senza _fields", query: { ...query, _fields: undefined }, options: { authInQuery: true } }
+  ];
+  let lastError = null;
+
+  for (const attempt of attempts) {
+    try {
+      const result = await wooRequest("orders", { query: attempt.query, ...attempt.options });
+      return { ...result, rows: orderRowsFromResponse(result.data) };
+    } catch (error) {
+      lastError = error;
+      addDiagnostic("orders", `Retry ordini ${attempt.label} fallito: ${error.message}`);
+    }
   }
+
+  throw lastError || new Error("Ordini WooCommerce non disponibili.");
 }
 
 ipcMain.handle("orders:list", async (_event, params = {}) => {
