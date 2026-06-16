@@ -55,11 +55,11 @@
     <div class="appShell">
       <main>
         <nav class="dashboardTabs" aria-label="Dashboard">
-          <button id="productsTabButton" class="active" type="button">Prodotti</button>
-          <button id="ordersTabButton" type="button">Ordini</button>
+          <button id="productsTabButton" type="button">Prodotti</button>
+          <button id="ordersTabButton" class="active" type="button">Ordini</button>
         </nav>
 
-        <section id="productsDashboard" class="dashboardPanel active" aria-label="Dashboard prodotti">
+        <section id="productsDashboard" class="dashboardPanel" aria-label="Dashboard prodotti" hidden>
         <header class="toolbar">
           <div>
             <p class="eyebrow">Prodotti e varianti</p>
@@ -180,7 +180,7 @@
         <section id="gridShell" class="gridShell" aria-label="Prodotti in griglia"></section>
         </section>
 
-        <section id="ordersDashboard" class="dashboardPanel ordersDashboard" aria-label="Dashboard ordini" hidden>
+        <section id="ordersDashboard" class="dashboardPanel ordersDashboard active" aria-label="Dashboard ordini">
           <header class="toolbar ordersToolbar">
             <div>
               <p class="eyebrow">Ordini WooCommerce</p>

@@ -5,7 +5,9 @@ const state = {
   loading: false,
   cacheSyncing: false,
   savingBulk: false,
-  activeDashboard: "products",
+  activeDashboard: "orders",
+  productsLoaded: false,
+  attributeFiltersLoaded: false,
   orders: [],
   orderPage: 1,
   orderTotalPages: 1,
@@ -188,9 +190,8 @@ function switchDashboard(dashboard) {
   els.ordersDashboard.classList.toggle("active", nextDashboard === "orders");
   els.productsTabButton.classList.toggle("active", nextDashboard === "products");
   els.ordersTabButton.classList.toggle("active", nextDashboard === "orders");
-  if (nextDashboard === "orders" && hasConfig() && !state.ordersLoaded) {
-    loadOrders(1);
-  }
+  if (nextDashboard === "orders" && hasConfig() && !state.ordersLoaded) loadOrders(1);
+  if (nextDashboard === "products" && hasConfig() && !state.productsLoaded) loadProductsDashboard();
 }
 
 function hasConfig() {
@@ -842,9 +843,8 @@ async function loadConfig() {
   if (!config.storeUrl || !config.consumerKey || !config.consumerSecret) {
     openSettings();
   } else {
-    setStatus("Configurazione caricata. Caricamento prodotti...", "ok");
-    await loadAttributeFilters();
-    await loadProducts(1);
+    setStatus("Configurazione caricata. Caricamento ordini...", "ok");
+    await loadOrders(1);
   }
 }
 
@@ -884,6 +884,7 @@ async function loadAttributeFilters() {
     renderCategoryTerms(filters.categories ? filters.categories.terms : []);
     renderVariantAttributeFilter(filters.attributes || []);
     renderBulkVariantAttributes(filters.attributes || []);
+    state.attributeFiltersLoaded = true;
   } catch (error) {
     renderTerms(els.setFilter, "Set non disponibili", []);
     renderTerms(els.languageFilter, "Lingue non disponibili", []);
@@ -892,6 +893,11 @@ async function loadAttributeFilters() {
     renderBulkVariantAttributes([]);
     setStatus(error.message || "Impossibile leggere gli attributi.", "error");
   }
+}
+
+async function loadProductsDashboard() {
+  if (!state.attributeFiltersLoaded) await loadAttributeFilters();
+  await loadProducts(1);
 }
 
 function currentConfig() {
@@ -921,6 +927,7 @@ async function loadProducts(page = state.page) {
       const result = await window.magazzino.listProducts({ ...params, skipLocal: true });
       if (requestId !== state.requestId) return;
       applyProductResult(result);
+      state.productsLoaded = true;
       setStatus(`${result.rows.length} prodotti caricati. Totale: ${result.total}.`);
       return;
     }
@@ -933,6 +940,7 @@ async function loadProducts(page = state.page) {
       state.rows = localResult.rows;
       state.page = localResult.page;
       state.totalPages = localResult.totalPages;
+      state.productsLoaded = true;
       setStatus(hasFilters
         ? `${localResult.rows.length} risultati locali. Aggiorno da WooCommerce...`
         : `${localResult.rows.length} prodotti caricati dalla cache. Totale: ${localResult.total}.`);
@@ -954,6 +962,7 @@ async function loadProducts(page = state.page) {
     const result = await window.magazzino.listProducts(params);
     if (requestId !== state.requestId) return;
     applyProductResult(result);
+    state.productsLoaded = true;
     setStatus(`${result.rows.length} prodotti caricati. Totale: ${result.total}.`);
     if (!hasFilters) preloadNeighborPages(result.page, result.totalPages);
   } catch (error) {
@@ -1324,9 +1333,8 @@ els.configForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
     await saveConfig();
-    await loadAttributeFilters();
-    await loadProducts(1);
-    if (state.activeDashboard === "orders") await loadOrders(1);
+    if (state.activeDashboard === "products") await loadProductsDashboard();
+    else await loadOrders(1);
   } catch (error) {
     setStatus(error.message || "Errore configurazione.", "error");
   }
@@ -1343,8 +1351,8 @@ els.testButton.addEventListener("click", async () => {
     setStatus("Test collegamento...");
     await window.magazzino.testConnection();
     setStatus("Collegamento riuscito.", "ok");
-    await loadAttributeFilters();
-    await loadProducts(1);
+    if (state.activeDashboard === "products") await loadProductsDashboard();
+    else await loadOrders(1);
   } catch (error) {
     setStatus(error.message || "Collegamento non riuscito.", "error");
   } finally {
@@ -1463,7 +1471,10 @@ document.addEventListener("keydown", (event) => {
 });
 
 els.refreshButton.addEventListener("click", () => loadProducts(1));
-els.menuRefreshButton.addEventListener("click", () => loadProducts(1));
+els.menuRefreshButton.addEventListener("click", () => {
+  if (state.activeDashboard === "orders") loadOrders(1);
+  else loadProducts(1);
+});
 els.productsTabButton.addEventListener("click", () => switchDashboard("products"));
 els.ordersTabButton.addEventListener("click", () => switchDashboard("orders"));
 els.refreshOrdersButton.addEventListener("click", () => loadOrders(1));
