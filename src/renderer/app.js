@@ -155,7 +155,7 @@ function setCacheStatus(status = {}) {
   els.cacheOverlay.classList.toggle("open", state.cacheSyncing);
   els.cacheOverlay.setAttribute("aria-hidden", state.cacheSyncing ? "false" : "true");
   els.cacheText.dataset.tone = status.syncing ? "busy" : status.complete ? "ok" : "normal";
-  renderRows();
+  if (state.activeDashboard === "products") renderRows();
 }
 
 function applyTheme(theme) {
@@ -1666,7 +1666,6 @@ window.magazzino.isWindowMaximized().then((isMaximized) => {
 });
 window.magazzino.getUpdateState().then(setUpdateStatus);
 window.magazzino.getCacheStatus().then(setCacheStatus);
-refreshCacheInfo().catch(() => {});
 applyTheme(state.theme);
 setProductView(localStorage.getItem("productView") || "list");
 syncExclusiveFilterInputs();
