@@ -2861,6 +2861,14 @@ function normalizeOrder(order = {}) {
   };
 }
 
+function orderRowsFromResponse(data) {
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.orders)) return data.orders;
+  if (data && data.message) throw new Error(data.message);
+  const type = data === null ? "null" : typeof data;
+  throw new Error(`Risposta ordini WooCommerce non valida (${type}).`);
+}
+
 ipcMain.handle("orders:list", async (_event, params = {}) => {
   const page = Math.max(Number(params.page || 1), 1);
   const status = String(params.status || "").trim();
@@ -2870,14 +2878,14 @@ ipcMain.handle("orders:list", async (_event, params = {}) => {
     per_page: 50,
     orderby: "date",
     order: "desc",
-    status: status || "any",
     _fields: "id,number,status,date_created,date_created_gmt,billing,shipping,currency,total,shipping_total,discount_total,payment_method,payment_method_title,line_items"
   };
+  if (status) query.status = status;
   if (search) query.search = search;
 
   const startedAt = Date.now();
   const result = await wooRequest("orders", { query });
-  const rows = (result.data || []).map(normalizeOrder);
+  const rows = orderRowsFromResponse(result.data).map(normalizeOrder);
   addDiagnostic("orders", `Ordini pagina ${page}: ${rows.length}/${result.total} in ${Date.now() - startedAt}ms.`);
   return {
     rows,
