@@ -42,6 +42,7 @@ const els = {
   helpButton: document.querySelector("#helpButton"),
   helpModal: document.querySelector("#helpModal"),
   helpVersion: document.querySelector("#helpVersion"),
+  openLogsButton: document.querySelector("#openLogsButton"),
   closeHelpButton: document.querySelector("#closeHelpButton"),
   themeToggleButton: document.querySelector("#themeToggleButton"),
   configForm: document.querySelector("#configForm"),
@@ -63,6 +64,7 @@ const els = {
   diagnosticsText: document.querySelector("#diagnosticsText"),
   refreshDiagnosticsButton: document.querySelector("#refreshDiagnosticsButton"),
   copyDiagnosticsButton: document.querySelector("#copyDiagnosticsButton"),
+  exportDiagnosticsButton: document.querySelector("#exportDiagnosticsButton"),
   closeDiagnosticsButton: document.querySelector("#closeDiagnosticsButton"),
   historyButton: document.querySelector("#historyButton"),
   clearHistoryButton: document.querySelector("#clearHistoryButton"),
@@ -1416,6 +1418,14 @@ els.copyDiagnosticsButton.addEventListener("click", async () => {
   els.diagnosticsText.select();
   await navigator.clipboard.writeText(els.diagnosticsText.value);
 });
+els.exportDiagnosticsButton.addEventListener("click", async () => {
+  try {
+    const result = await window.magazzino.exportDiagnostics();
+    if (result && !result.canceled) setStatus("Log diagnostica esportato.", "ok");
+  } catch (error) {
+    setStatus(error.message || "Esportazione log non riuscita.", "error");
+  }
+});
 els.closeDiagnosticsButton.addEventListener("click", closeDiagnostics);
 els.diagnosticsModal.addEventListener("click", (event) => {
   if (event.target === els.diagnosticsModal) closeDiagnostics();
@@ -1535,6 +1545,10 @@ els.gridViewButton.addEventListener("click", () => setProductView("grid"));
 els.inlineListViewButton.addEventListener("click", () => setProductView("list"));
 els.inlineGridViewButton.addEventListener("click", () => setProductView("grid"));
 els.helpButton.addEventListener("click", openHelp);
+els.openLogsButton.addEventListener("click", () => {
+  closeHelp();
+  openDiagnostics();
+});
 els.closeHelpButton.addEventListener("click", closeHelp);
 els.helpModal.addEventListener("click", (event) => {
   if (event.target === els.helpModal) closeHelp();

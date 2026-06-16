@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("magazzino", {
   clearImageCache: () => ipcRenderer.invoke("cache:clear-images"),
   refreshCachePage: (page) => ipcRenderer.invoke("cache:refresh-page", page),
   getDiagnostics: () => ipcRenderer.invoke("diagnostics:get"),
+  exportDiagnostics: () => ipcRenderer.invoke("diagnostics:export"),
   getHistory: () => ipcRenderer.invoke("history:get"),
   clearHistory: () => ipcRenderer.invoke("history:clear"),
   exportCsv: (rows) => ipcRenderer.invoke("csv:export", rows),

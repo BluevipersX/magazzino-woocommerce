@@ -1215,6 +1215,14 @@ tr.dirty td:first-child {
   grid-template-columns: 1fr;
 }
 
+.helpActions {
+  grid-template-columns: 1fr 1fr;
+}
+
+.diagnosticsDialog .buttonRow {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 #diagnosticsText,
 #historyText,
 #importCsvErrors {

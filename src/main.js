@@ -2609,6 +2609,17 @@ ipcMain.handle("cache:clear", async () => clearProductCache());
 ipcMain.handle("cache:clear-images", async () => clearImageCache());
 ipcMain.handle("cache:refresh-page", async (_event, page) => refreshCachePage(page));
 ipcMain.handle("diagnostics:get", async () => diagnosticLog.map((entry) => `[${entry.time}] ${entry.event}: ${entry.detail}`).join("\n"));
+ipcMain.handle("diagnostics:export", async () => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: "Esporta log diagnostica",
+    defaultPath: `magazzino-woocommerce-log-${new Date().toISOString().slice(0, 10)}.txt`,
+    filters: [{ name: "File di testo", extensions: ["txt"] }]
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  const text = diagnosticLog.map((entry) => `[${entry.time}] ${entry.event}: ${entry.detail}`).join("\n");
+  await fs.writeFile(result.filePath, text || "Nessun evento diagnostico.", "utf8");
+  return { canceled: false, filePath: result.filePath };
+});
 ipcMain.handle("history:get", async () => (await readChangeHistory()).map(formatHistoryEntry).reverse().join("\n"));
 ipcMain.handle("history:clear", async () => clearChangeHistory());
 ipcMain.handle("csv:export", async (_event, rows = []) => exportRowsToCsv(rows));
@@ -2871,6 +2882,9 @@ function orderRowsFromResponse(data) {
     } catch {
       const preview = trimmed.replace(/\s+/g, " ").slice(0, 160);
       addDiagnostic("orders", `Risposta ordini stringa non JSON: ${preview}`);
+      if (/<html/i.test(trimmed) && /sgcaptcha|captcha|well-known/i.test(trimmed)) {
+        throw new Error("WooCommerce ordini bloccato da captcha/protezione server. Escludi /wp-json/wc/v3/orders da SiteGround Security, cache o firewall.");
+      }
       throw new Error(`WooCommerce ha restituito una risposta ordini non JSON: ${preview}`);
     }
   }
