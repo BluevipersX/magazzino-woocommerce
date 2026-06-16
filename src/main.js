@@ -2863,10 +2863,36 @@ function normalizeOrder(order = {}) {
 
 function orderRowsFromResponse(data) {
   if (Array.isArray(data)) return data;
+  if (typeof data === "string") {
+    const trimmed = data.trim();
+    if (!trimmed) return [];
+    try {
+      return orderRowsFromResponse(JSON.parse(trimmed));
+    } catch {
+      const preview = trimmed.replace(/\s+/g, " ").slice(0, 160);
+      addDiagnostic("orders", `Risposta ordini stringa non JSON: ${preview}`);
+      throw new Error(`WooCommerce ha restituito una risposta ordini non JSON: ${preview}`);
+    }
+  }
+  if (data && Array.isArray(data.data)) return data.data;
   if (data && Array.isArray(data.orders)) return data.orders;
   if (data && data.message) throw new Error(data.message);
   const type = data === null ? "null" : typeof data;
   throw new Error(`Risposta ordini WooCommerce non valida (${type}).`);
+}
+
+async function fetchOrdersWithFallback(query) {
+  const result = await wooRequest("orders", { query });
+  try {
+    return { ...result, rows: orderRowsFromResponse(result.data) };
+  } catch (error) {
+    if (!query._fields) throw error;
+    addDiagnostic("orders", `Retry ordini senza _fields: ${error.message}`);
+    const fallbackQuery = { ...query };
+    delete fallbackQuery._fields;
+    const fallback = await wooRequest("orders", { query: fallbackQuery });
+    return { ...fallback, rows: orderRowsFromResponse(fallback.data) };
+  }
 }
 
 ipcMain.handle("orders:list", async (_event, params = {}) => {
@@ -2884,8 +2910,8 @@ ipcMain.handle("orders:list", async (_event, params = {}) => {
   if (search) query.search = search;
 
   const startedAt = Date.now();
-  const result = await wooRequest("orders", { query });
-  const rows = orderRowsFromResponse(result.data).map(normalizeOrder);
+  const result = await fetchOrdersWithFallback(query);
+  const rows = result.rows.map(normalizeOrder);
   addDiagnostic("orders", `Ordini pagina ${page}: ${rows.length}/${result.total} in ${Date.now() - startedAt}ms.`);
   return {
     rows,
