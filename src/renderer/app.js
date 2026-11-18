@@ -14,6 +14,14 @@ const state = {
   ordersLoaded: false,
   ordersLoading: false,
   selectedOrderId: null,
+  orderTracking: new Map(),
+  orderTrackingLoading: new Set(),
+  orderTrackingSaving: new Set(),
+  orderStatusUpdating: new Set(),
+  orderRefunds: new Map(),
+  orderRefundsLoading: new Set(),
+  orderRefundSaving: new Set(),
+  refundOrderId: null,
   orderSearchTimer: null,
   requestId: 0,
   searchTimer: null,
@@ -141,7 +149,15 @@ const els = {
   ordersNextButton: document.querySelector("#ordersNextButton"),
   ordersPageText: document.querySelector("#ordersPageText"),
   ordersBody: document.querySelector("#ordersBody"),
-  orderDetails: document.querySelector("#orderDetails")
+  orderDetails: document.querySelector("#orderDetails"),
+  refundModal: document.querySelector("#refundModal"),
+  refundOrderTitle: document.querySelector("#refundOrderTitle"),
+  refundAvailability: document.querySelector("#refundAvailability"),
+  refundAmount: document.querySelector("#refundAmount"),
+  refundReason: document.querySelector("#refundReason"),
+  refundViaGateway: document.querySelector("#refundViaGateway"),
+  refundSubmitButton: document.querySelector("#refundSubmitButton"),
+  refundCancelButton: document.querySelector("#refundCancelButton")
 };
 
 function setStatus(message, tone = "normal") {
@@ -677,12 +693,48 @@ function orderStatusLabel(status) {
     pending: "In attesa",
     processing: "In lavorazione",
     "on-hold": "In sospeso",
+    "partially-shipped": "Parzialmente spedito",
     completed: "Completato",
     cancelled: "Annullato",
     refunded: "Rimborsato",
     failed: "Fallito"
   };
   return labels[status] || status || "-";
+}
+
+const editableOrderStatuses = [
+  ["pending", "In attesa"],
+  ["processing", "In lavorazione"],
+  ["on-hold", "In sospeso"],
+  ["partially-shipped", "Parzialmente spedito"],
+  ["completed", "Completato"],
+  ["cancelled", "Annullato"],
+  ["refunded", "Rimborsato"],
+  ["failed", "Fallito"]
+];
+
+function orderStatusOptionsMarkup(currentStatus) {
+  const options = [...editableOrderStatuses];
+  if (currentStatus && !options.some(([value]) => value === currentStatus)) {
+    options.unshift([currentStatus, orderStatusLabel(currentStatus)]);
+  }
+  return options.map(([value, label]) => `
+    <option value="${escapeAttr(value)}" ${currentStatus === value ? "selected" : ""}>${escapeHtml(label)}</option>
+  `).join("");
+}
+
+function trackingErrorMessage(error) {
+  const message = String(typeof error === "string" ? error : error && error.message || "Errore sconosciuto");
+  if (/\b404\b|rest_no_route|no route|endpoint.*not found/i.test(message)) {
+    return "API tracking non disponibile. Attiva Enable REST API in WooCommerce > Impostazioni > Shipment Tracking > Advanced.";
+  }
+  if (/\b401\b|\b403\b|unauthori[sz]ed|forbidden/i.test(message)) {
+    return "Permessi insufficienti: verifica che le chiavi REST WooCommerce abbiano accesso in lettura e scrittura.";
+  }
+  if (/carrier|corrier|provider/i.test(message)) {
+    return "ID corriere non riconosciuto. L'API accetta i corrieri integrati, non quelli personalizzati dalla schermata ordini.";
+  }
+  return message;
 }
 
 function formatOrderDate(value) {
@@ -714,6 +766,19 @@ function renderOrderDetails(order) {
   }
 
   const items = order.items || [];
+  let trackingState = state.orderTracking.get(order.id);
+  if (!trackingState) {
+    trackingState = { status: "loading", rows: [] };
+    state.orderTracking.set(order.id, trackingState);
+  }
+  if (trackingState.status === "idle") {
+    trackingState.status = "loading";
+  }
+  if (trackingState.status === "loading" && !state.orderTrackingLoading.has(order.id)) {
+    loadOrderTracking(order.id);
+  }
+  const trackingRows = trackingState.rows || [];
+  const isSavingTracking = state.orderTrackingSaving.has(order.id);
   els.orderDetails.innerHTML = `
     <div class="orderDetailHeader">
       <div>
@@ -727,6 +792,9 @@ function renderOrderDetails(order) {
       <div><span>Totale</span><strong>${escapeHtml(formatOrderMoney(order.total, order.currency))}</strong></div>
       <div><span>Prodotti</span><strong>${escapeHtml(orderItemsCount(order))}</strong></div>
       <div><span>Pagamento</span><strong>${escapeHtml(order.paymentMethod || "-")}</strong></div>
+    </div>
+    <div class="orderActions">
+      <button class="secondary" type="button" data-refund-order="${escapeAttr(order.id)}" ${state.orderRefundSaving.has(order.id) ? "disabled" : ""}>Rimborsa ordine</button>
     </div>
     <div class="orderContact">
       <div>
@@ -742,6 +810,39 @@ function renderOrderDetails(order) {
         <strong>${escapeHtml(order.shippingAddress || order.billingAddress || "-")}</strong>
       </div>
     </div>
+    <section class="orderTracking">
+      <div class="orderTrackingHeading">
+        <h3>Spedizione e tracking</h3>
+        <span>${trackingRows.length} codici</span>
+      </div>
+      ${trackingState.status === "loading" ? `<p class="trackingMessage">Caricamento tracking...</p>` : ""}
+      ${trackingState.status === "error" ? `
+        <div class="trackingErrorBlock">
+          <p class="trackingMessage error">${escapeHtml(trackingErrorMessage(trackingState.error))}</p>
+          <button class="secondary trackingRetryButton" type="button" data-retry-order-tracking="${escapeAttr(order.id)}">Riprova</button>
+        </div>
+      ` : ""}
+      ${trackingRows.length ? `
+        <div class="trackingList">
+          ${trackingRows.map((tracking) => `
+            <article class="trackingItem">
+              <div><strong>${escapeHtml(tracking.carrierName || tracking.carrierId || "Corriere")}</strong><span>${escapeHtml(tracking.trackingNumber)}</span></div>
+              <small>${escapeHtml(formatOrderDate(tracking.dateShipped))}</small>
+            </article>
+          `).join("")}
+        </div>
+      ` : trackingState.status === "loaded" ? `<p class="trackingMessage">Nessun codice tracking inserito.</p>` : ""}
+      <form class="trackingForm" data-order-tracking-form data-order-id="${escapeAttr(order.id)}">
+        <label>ID corriere API
+          <input name="carrierId" type="text" maxlength="100" placeholder="es. ups / ID Packlink registrato" autocomplete="off" required ${isSavingTracking || trackingState.status === "loading" ? "disabled" : ""} />
+        </label>
+        <label>Codice tracking
+          <input name="trackingNumber" type="text" maxlength="200" placeholder="Numero della spedizione" autocomplete="off" required ${isSavingTracking || trackingState.status === "loading" ? "disabled" : ""} />
+        </label>
+        <button type="submit" ${isSavingTracking || trackingState.status === "loading" ? "disabled" : ""}>${isSavingTracking ? "Salvataggio..." : "Aggiungi tracking"}</button>
+        <small>Richiede l'API REST Shipment Tracking attiva. Packlink PRO può sincronizzare i dati: il codice appare qui se l'integrazione lo espone a questo endpoint.</small>
+      </form>
+    </section>
     <div class="orderItems">
       <h3>Prodotti acquistati</h3>
       ${
@@ -791,13 +892,196 @@ function renderOrders() {
         <div class="productName tableProductName">${escapeHtml(order.customerName)}</div>
         <div class="subtle">${escapeHtml(order.email || "-")}</div>
       </td>
-      <td><span class="badge orderStatus ${escapeAttr(order.status)}">${escapeHtml(orderStatusLabel(order.status))}</span></td>
+      <td>
+        <select class="orderStatusSelect" data-order-status data-order-id="${escapeAttr(order.id)}" aria-label="Stato ordine ${escapeAttr(order.number)}" ${state.orderStatusUpdating.has(order.id) ? "disabled" : ""}>
+          ${orderStatusOptionsMarkup(order.status)}
+        </select>
+      </td>
       <td>${escapeHtml(formatOrderMoney(order.total, order.currency))}</td>
       <td>${escapeHtml(orderItemsCount(order))}</td>
     </tr>
   `).join("");
 
   renderOrderDetails(state.orders.find((order) => order.id === state.selectedOrderId));
+}
+
+function selectOrder(orderId) {
+  state.selectedOrderId = Number(orderId);
+  els.ordersBody.querySelectorAll("tr[data-order-id]").forEach((row) => {
+    row.classList.toggle("selected", Number(row.dataset.orderId) === state.selectedOrderId);
+  });
+  renderOrderDetails(state.orders.find((order) => order.id === state.selectedOrderId));
+}
+
+async function loadOrderTracking(orderId) {
+  const id = Number(orderId);
+  if (state.orderTrackingLoading.has(id)) return;
+  state.orderTrackingLoading.add(id);
+  const current = state.orderTracking.get(id) || { status: "loading", rows: [] };
+  current.status = "loading";
+  state.orderTracking.set(id, current);
+  try {
+    const result = await window.magazzino.getOrderTracking(id);
+    state.orderTracking.set(id, { status: "loaded", rows: result.rows || [] });
+  } catch (error) {
+    state.orderTracking.set(id, { status: "error", rows: current.rows || [], error: error.message });
+  } finally {
+    state.orderTrackingLoading.delete(id);
+    if (state.selectedOrderId === id) {
+      renderOrderDetails(state.orders.find((order) => order.id === id));
+    }
+  }
+}
+
+async function updateOrderStatus(orderId, nextStatus, select) {
+  const order = state.orders.find((item) => item.id === Number(orderId));
+  if (!order || order.status === nextStatus) return;
+  const previousStatus = order.status;
+  state.orderStatusUpdating.add(order.id);
+  select.disabled = true;
+  els.ordersStatusText.textContent = `Aggiornamento ordine #${order.number}...`;
+  try {
+    const result = await window.magazzino.updateOrderStatus(order.id, nextStatus);
+    order.status = result.status || nextStatus;
+    if (els.orderStatusFilter.value && els.orderStatusFilter.value !== order.status) {
+      await loadOrders(state.orderPage);
+    } else {
+      els.ordersStatusText.textContent = `Ordine #${order.number}: stato aggiornato a ${orderStatusLabel(order.status)}.`;
+    }
+  } catch (error) {
+    order.status = previousStatus;
+    els.ordersStatusText.textContent = `Ordine #${order.number}: ${error.message || "impossibile aggiornare lo stato."}`;
+  } finally {
+    state.orderStatusUpdating.delete(order.id);
+    renderOrders();
+  }
+}
+
+async function addTrackingToOrder(form) {
+  const orderId = Number(form.dataset.orderId);
+  const order = state.orders.find((item) => item.id === orderId);
+  if (!order || state.orderTrackingSaving.has(orderId)) return;
+  const carrierId = String(form.elements.carrierId.value || "").trim();
+  const trackingNumber = String(form.elements.trackingNumber.value || "").trim();
+  const submitButton = form.querySelector('button[type="submit"]');
+  state.orderTrackingSaving.add(orderId);
+  submitButton.disabled = true;
+  els.ordersStatusText.textContent = `Salvataggio tracking ordine #${order.number}...`;
+  renderOrderDetails(order);
+  try {
+    const result = await window.magazzino.addOrderTracking({ orderId, carrierId, trackingNumber });
+    const current = state.orderTracking.get(orderId) || { rows: [] };
+    state.orderTracking.set(orderId, {
+      status: "loaded",
+      rows: [...(current.rows || []), result.tracking]
+    });
+    els.ordersStatusText.textContent = `Tracking aggiunto all'ordine #${order.number}.`;
+  } catch (error) {
+    const message = trackingErrorMessage(error);
+    const current = state.orderTracking.get(orderId) || { rows: [] };
+    state.orderTracking.set(orderId, { status: "error", rows: current.rows || [], error: message });
+    els.ordersStatusText.textContent = `Ordine #${order.number}: ${message}`;
+  } finally {
+    state.orderTrackingSaving.delete(orderId);
+    renderOrderDetails(order);
+  }
+}
+
+function closeRefundModal(force = false) {
+  if (!force && state.refundOrderId !== null && state.orderRefundSaving.has(state.refundOrderId)) return;
+  els.refundModal.classList.remove("open");
+  els.refundModal.setAttribute("aria-hidden", "true");
+  state.refundOrderId = null;
+}
+
+async function openRefundModal(orderId) {
+  const id = Number(orderId);
+  const order = state.orders.find((item) => item.id === id);
+  if (!order || state.orderRefundsLoading.has(id) || state.orderRefundSaving.has(id)) return;
+
+  state.refundOrderId = id;
+  els.refundOrderTitle.textContent = `Rimborsa ordine #${order.number}`;
+  els.refundAvailability.textContent = "Controllo i rimborsi gia registrati...";
+  els.refundAmount.value = "";
+  els.refundAmount.removeAttribute("max");
+  els.refundAmount.disabled = false;
+  els.refundReason.value = "";
+  els.refundViaGateway.checked = false;
+  els.refundSubmitButton.textContent = "Registra rimborso manuale";
+  els.refundSubmitButton.disabled = true;
+  els.refundModal.classList.add("open");
+  els.refundModal.setAttribute("aria-hidden", "false");
+  state.orderRefundsLoading.add(id);
+
+  try {
+    const result = await window.magazzino.getOrderRefunds(id);
+    const total = Math.max(Number(order.total || 0), 0);
+    const totalRefunded = Math.max(Number(result.totalRefunded || 0), 0);
+    const remaining = Math.max(Math.round((total - totalRefunded) * 100) / 100, 0);
+    state.orderRefunds.set(id, { rows: result.rows || [], totalRefunded, remaining });
+    if (state.refundOrderId !== id) return;
+    els.refundAvailability.textContent = `Ordine ${formatOrderMoney(total, order.currency)}. Gia rimborsato ${formatOrderMoney(totalRefunded, order.currency)}. Ancora rimborsabile ${formatOrderMoney(remaining, order.currency)}.`;
+    els.refundAmount.max = remaining.toFixed(2);
+    els.refundAmount.value = remaining > 0 ? remaining.toFixed(2) : "";
+    els.refundAmount.disabled = remaining <= 0;
+    els.refundSubmitButton.disabled = remaining <= 0;
+    if (remaining <= 0) els.refundAvailability.textContent += " Nessun importo residuo.";
+  } catch (error) {
+    if (state.refundOrderId === id) {
+      els.refundAvailability.textContent = `Non riesco a verificare quanto e gia stato rimborsato: ${error.message || "errore WooCommerce"}. Per evitare un doppio rimborso, non procedo.`;
+    }
+  } finally {
+    state.orderRefundsLoading.delete(id);
+  }
+}
+
+async function submitOrderRefund() {
+  const id = Number(state.refundOrderId);
+  const order = state.orders.find((item) => item.id === id);
+  const refundState = state.orderRefunds.get(id);
+  if (!order || !refundState || state.orderRefundSaving.has(id)) return;
+
+  const amount = Math.round(Number(String(els.refundAmount.value || "0").replace(",", ".")) * 100) / 100;
+  if (!Number.isFinite(amount) || amount <= 0 || amount > refundState.remaining) {
+    els.refundAvailability.textContent = `Inserisci un importo tra 0,01 e ${formatOrderMoney(refundState.remaining, order.currency)}.`;
+    return;
+  }
+
+  state.orderRefundSaving.add(id);
+  els.refundSubmitButton.disabled = true;
+  els.refundCancelButton.disabled = true;
+  els.refundSubmitButton.textContent = els.refundViaGateway.checked ? "Invio rimborso..." : "Registrazione...";
+  try {
+    const result = await window.magazzino.addOrderRefund({
+      orderId: id,
+      amount: amount.toFixed(2),
+      reason: els.refundReason.value.trim(),
+      apiRefund: els.refundViaGateway.checked
+    });
+    const totalRefunded = Math.round((refundState.totalRefunded + amount) * 100) / 100;
+    const remaining = Math.max(Math.round((refundState.remaining - amount) * 100) / 100, 0);
+    state.orderRefunds.set(id, {
+      rows: [...refundState.rows, result.refund],
+      totalRefunded,
+      remaining
+    });
+    els.ordersStatusText.textContent = `Rimborso di ${formatOrderMoney(amount, order.currency)} ${result.apiRefund ? "inviato al metodo di pagamento" : "registrato manualmente"} per l'ordine #${order.number}.`;
+    closeRefundModal(true);
+  } catch (error) {
+    els.refundAvailability.textContent = error.message || "WooCommerce non ha completato il rimborso.";
+  } finally {
+    state.orderRefundSaving.delete(id);
+    els.refundCancelButton.disabled = false;
+    if (els.refundModal.classList.contains("open")) {
+      const updated = state.orderRefunds.get(id);
+      const enteredAmount = Number(String(els.refundAmount.value || "0").replace(",", "."));
+      els.refundSubmitButton.disabled = !updated || enteredAmount <= 0 || enteredAmount > updated.remaining;
+      els.refundSubmitButton.textContent = els.refundViaGateway.checked
+        ? "Conferma rimborso al cliente"
+        : "Registra rimborso manuale";
+    }
+    renderOrders();
+  }
 }
 
 function currentOrderParams(page = state.orderPage) {
@@ -1477,6 +1761,10 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.key === "Escape" && els.helpModal.classList.contains("open")) {
     closeHelp();
+    return;
+  }
+  if (event.key === "Escape" && els.refundModal.classList.contains("open")) {
+    closeRefundModal();
   }
 });
 
@@ -1502,8 +1790,43 @@ els.orderSearchInput.addEventListener("keydown", (event) => {
 els.ordersBody.addEventListener("click", (event) => {
   const row = event.target.closest("tr[data-order-id]");
   if (!row) return;
-  state.selectedOrderId = Number(row.dataset.orderId);
-  renderOrders();
+  selectOrder(row.dataset.orderId);
+});
+els.ordersBody.addEventListener("change", (event) => {
+  const select = event.target.closest("select[data-order-status]");
+  if (!select) return;
+  updateOrderStatus(select.dataset.orderId, select.value, select);
+});
+els.orderDetails.addEventListener("submit", (event) => {
+  const form = event.target.closest("form[data-order-tracking-form]");
+  if (!form) return;
+  event.preventDefault();
+  addTrackingToOrder(form);
+});
+els.orderDetails.addEventListener("click", (event) => {
+  const refundButton = event.target.closest("button[data-refund-order]");
+  if (refundButton) {
+    openRefundModal(refundButton.dataset.refundOrder);
+    return;
+  }
+  const retryButton = event.target.closest("button[data-retry-order-tracking]");
+  if (retryButton) loadOrderTracking(retryButton.dataset.retryOrderTracking);
+});
+els.refundSubmitButton.addEventListener("click", submitOrderRefund);
+els.refundCancelButton.addEventListener("click", closeRefundModal);
+els.refundViaGateway.addEventListener("change", () => {
+  els.refundSubmitButton.textContent = els.refundViaGateway.checked
+    ? "Conferma rimborso al cliente"
+    : "Registra rimborso manuale";
+});
+els.refundAmount.addEventListener("input", () => {
+  const id = Number(state.refundOrderId);
+  const current = state.orderRefunds.get(id);
+  const amount = Number(String(els.refundAmount.value || "0").replace(",", "."));
+  els.refundSubmitButton.disabled = !current || amount <= 0 || amount > current.remaining || state.orderRefundSaving.has(id);
+});
+els.refundModal.addEventListener("click", (event) => {
+  if (event.target === els.refundModal) closeRefundModal();
 });
 els.menuExportCsvButton.addEventListener("click", exportCsv);
 els.menuImportCsvButton.addEventListener("click", importCsv);

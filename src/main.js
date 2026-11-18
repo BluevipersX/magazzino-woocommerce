@@ -2878,6 +2878,54 @@ function normalizeOrder(order = {}) {
   };
 }
 
+const editableOrderStatuses = new Set([
+  "pending",
+  "processing",
+  "on-hold",
+  "partially-shipped",
+  "completed",
+  "cancelled",
+  "refunded",
+  "failed"
+]);
+
+function normalizeTrackingItem(item = {}) {
+  return {
+    trackingNumber: String(item.tracking_number || ""),
+    carrierId: String(item.carrier_id || ""),
+    carrierName: String(item.carrier_name || item.tracking_provider || item.carrier_id || "Corriere"),
+    trackingLink: String(item.tracking_link || ""),
+    dateShipped: String(item.date_shipped || "")
+  };
+}
+
+function normalizeTrackingRows(data) {
+  if (Array.isArray(data)) return data.map(normalizeTrackingItem);
+  if (data && Array.isArray(data.data)) return data.data.map(normalizeTrackingItem);
+  if (data && Array.isArray(data.tracking)) return data.tracking.map(normalizeTrackingItem);
+  if (typeof data === "string") {
+    const preview = data.trim().replace(/\s+/g, " ").slice(0, 140);
+    if (/<html/i.test(data)) throw new Error("L'endpoint tracking ha restituito HTML invece di JSON.");
+    throw new Error(`Risposta tracking WooCommerce non valida: ${preview || "vuota"}`);
+  }
+  if (data == null) return [];
+  throw new Error("Risposta tracking WooCommerce non valida.");
+}
+
+function isWooAuthError(error) {
+  return /\b(401|403)\b|unauthori[sz]ed|forbidden|consumer key|consumer secret|signature/i.test(String(error && error.message));
+}
+
+async function orderRequestWithAuthFallback(endpoint, options = {}) {
+  try {
+    return await wooRequest(endpoint, options);
+  } catch (error) {
+    if (!isWooAuthError(error)) throw error;
+    addDiagnostic("orders", `Retry endpoint ordine ${endpoint} con autenticazione query.`);
+    return wooRequest(endpoint, { ...options, authInQuery: true });
+  }
+}
+
 function orderRowsFromResponse(data) {
   if (Array.isArray(data)) return data;
   if (typeof data === "string") {
@@ -2947,6 +2995,115 @@ ipcMain.handle("orders:list", async (_event, params = {}) => {
     total: result.total,
     totalPages: result.totalPages || 1
   };
+});
+
+ipcMain.handle("orders:update-status", async (_event, params = {}) => {
+  const orderId = Number(params.orderId);
+  const status = String(params.status || "").trim();
+  if (!Number.isSafeInteger(orderId) || orderId <= 0) throw new Error("ID ordine non valido.");
+  if (!editableOrderStatuses.has(status)) throw new Error("Stato ordine non valido.");
+
+  const result = await orderRequestWithAuthFallback(`orders/${orderId}`, {
+    method: "PUT",
+    retries: 1,
+    body: { status }
+  });
+  if (!result.data || typeof result.data !== "object" || Array.isArray(result.data)) {
+    throw new Error("WooCommerce non ha restituito i dettagli dell'ordine aggiornato.");
+  }
+  const updatedStatus = String(result.data.status || status);
+  addDiagnostic("orders", `Stato ordine ${orderId} aggiornato a ${updatedStatus}.`);
+  return { orderId, status: updatedStatus };
+});
+
+ipcMain.handle("orders:get-tracking", async (_event, params = {}) => {
+  const orderId = Number(params.orderId);
+  if (!Number.isSafeInteger(orderId) || orderId <= 0) throw new Error("ID ordine non valido.");
+
+  try {
+    const result = await orderRequestWithAuthFallback(`orders/${orderId}/shipment-tracking`);
+    const rows = normalizeTrackingRows(result.data);
+    addDiagnostic("orders", `Tracking ordine ${orderId}: ${rows.length} spedizioni.`);
+    return { rows };
+  } catch (error) {
+    addDiagnostic("orders", `Lettura tracking ordine ${orderId} non riuscita: ${error.message}`);
+    throw error;
+  }
+});
+
+ipcMain.handle("orders:add-tracking", async (_event, params = {}) => {
+  const orderId = Number(params.orderId);
+  const trackingNumber = String(params.trackingNumber || "").trim();
+  const carrierId = String(params.carrierId || "").trim();
+  if (!Number.isSafeInteger(orderId) || orderId <= 0) throw new Error("ID ordine non valido.");
+  if (!trackingNumber || trackingNumber.length > 200) throw new Error("Inserisci un codice tracking valido (massimo 200 caratteri).");
+  if (!carrierId || carrierId.length > 100) throw new Error("Inserisci l'ID API del corriere (massimo 100 caratteri).");
+
+  try {
+    const result = await orderRequestWithAuthFallback(`orders/${orderId}/shipment-tracking`, {
+      method: "POST",
+      retries: 1,
+      body: { tracking_number: trackingNumber, carrier_id: carrierId }
+    });
+    const responseData = result.data;
+    if (!responseData || typeof responseData !== "object" || Array.isArray(responseData)) {
+      throw new Error("Risposta tracking WooCommerce non valida.");
+    }
+    if (responseData.success === false) throw new Error(responseData.message || "WooCommerce non ha salvato il tracking.");
+    const trackingData = responseData.data || responseData;
+    const tracking = normalizeTrackingItem(trackingData);
+    if (!tracking.trackingNumber) throw new Error(responseData.message || "WooCommerce non ha confermato il codice tracking.");
+    addDiagnostic("orders", `Tracking aggiunto all'ordine ${orderId} (${tracking.carrierName}).`);
+    return { tracking };
+  } catch (error) {
+    addDiagnostic("orders", `Inserimento tracking ordine ${orderId} non riuscito: ${error.message}`);
+    throw error;
+  }
+});
+
+function normalizeRefund(refund = {}) {
+  const rawAmount = Number(String(refund.total || refund.amount || "0").replace(",", "."));
+  return {
+    id: Number(refund.id || 0),
+    amount: Number.isFinite(rawAmount) ? Math.abs(rawAmount) : 0,
+    reason: String(refund.reason || ""),
+    dateCreated: String(refund.date_created || refund.date_created_gmt || "")
+  };
+}
+
+ipcMain.handle("orders:get-refunds", async (_event, params = {}) => {
+  const orderId = Number(params.orderId);
+  if (!Number.isSafeInteger(orderId) || orderId <= 0) throw new Error("ID ordine non valido.");
+  const result = await orderRequestWithAuthFallback(`orders/${orderId}/refunds`);
+  if (!Array.isArray(result.data)) {
+    throw new Error("WooCommerce non ha restituito un elenco rimborsi valido.");
+  }
+  const rows = result.data.map(normalizeRefund);
+  const totalRefunded = rows.reduce((total, refund) => total + refund.amount, 0);
+  addDiagnostic("orders", `Rimborsi ordine ${orderId}: ${rows.length} registrati.`);
+  return { rows, totalRefunded };
+});
+
+ipcMain.handle("orders:add-refund", async (_event, params = {}) => {
+  const orderId = Number(params.orderId);
+  const amount = Math.round(Number(String(params.amount || "0").replace(",", ".")) * 100) / 100;
+  const reason = String(params.reason || "").trim().slice(0, 250);
+  const apiRefund = Boolean(params.apiRefund);
+  if (!Number.isSafeInteger(orderId) || orderId <= 0) throw new Error("ID ordine non valido.");
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error("L'importo del rimborso deve essere maggiore di zero.");
+
+  const result = await orderRequestWithAuthFallback(`orders/${orderId}/refunds`, {
+    method: "POST",
+    retries: 1,
+    body: { amount: amount.toFixed(2), reason, api_refund: apiRefund }
+  });
+  if (!result.data || typeof result.data !== "object" || Array.isArray(result.data)) {
+    throw new Error("WooCommerce non ha restituito i dettagli del rimborso.");
+  }
+  const refund = normalizeRefund(result.data);
+  if (!refund.amount) refund.amount = amount;
+  addDiagnostic("orders", `Rimborso ordine ${orderId} registrato (${apiRefund ? "gateway" : "manuale"}).`);
+  return { refund, apiRefund };
 });
 
 ipcMain.handle("products:preload-page", async (_event, params = {}) => {

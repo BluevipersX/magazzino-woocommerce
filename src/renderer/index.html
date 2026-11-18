@@ -219,7 +219,7 @@
                     <th>Ordine</th>
                     <th>Data</th>
                     <th>Cliente</th>
-                    <th>Stato</th>
+                    <th>Stato ordine</th>
                     <th>Totale</th>
                     <th>Prodotti</th>
                   </tr>
@@ -248,6 +248,33 @@
           <span id="cacheOverlayText">Preparazione cache...</span>
         </div>
       </div>
+    </div>
+
+    <div id="refundModal" class="modalOverlay" aria-hidden="true">
+      <section class="settingsDialog refundDialog" role="dialog" aria-modal="true" aria-labelledby="refundOrderTitle">
+        <div>
+          <p class="eyebrow">Rimborso WooCommerce</p>
+          <h3 id="refundOrderTitle">Rimborsa ordine</h3>
+        </div>
+        <div id="refundAvailability" class="settingsHint">Verifica importo rimborsabile...</div>
+        <label>
+          Importo
+          <input id="refundAmount" type="number" min="0.01" step="0.01" inputmode="decimal" />
+        </label>
+        <label>
+          Motivo (facoltativo)
+          <input id="refundReason" type="text" maxlength="250" placeholder="Motivo del rimborso" />
+        </label>
+        <label class="refundGatewayToggle">
+          <input id="refundViaGateway" type="checkbox" />
+          Invia il denaro al metodo di pagamento
+        </label>
+        <p class="settingsHint">Senza selezionare l'opzione, il rimborso viene solo registrato in WooCommerce. Lo stato dell'ordine non cambia automaticamente: per annullarlo usa il selettore di stato.</p>
+        <div class="buttonRow">
+          <button id="refundSubmitButton" type="button" disabled>Registra rimborso</button>
+          <button id="refundCancelButton" class="secondary" type="button">Annulla</button>
+        </div>
+      </section>
     </div>
 
     <div id="configModal" class="modalOverlay" aria-hidden="true">
