@@ -787,7 +787,21 @@ tr.dirty td:first-child {
 }
 
 .ordersTableShell table {
-  min-width: 760px;
+  width: 920px;
+  min-width: 920px;
+  table-layout: fixed;
+}
+
+.ordersTableShell .orderColumnNumber { width: 11%; }
+.ordersTableShell .orderColumnDate { width: 16%; }
+.ordersTableShell .orderColumnCustomer { width: 25%; }
+.ordersTableShell .orderColumnStatus { width: 22%; }
+.ordersTableShell .orderColumnTotal { width: 14%; }
+.ordersTableShell .orderColumnProducts { width: 12%; }
+
+.ordersTableShell th,
+.ordersTableShell td {
+  box-sizing: border-box;
 }
 
 .orderRow {
@@ -804,11 +818,12 @@ tr.dirty td:first-child {
 }
 
 .orderStatusSelect {
-  width: 145px;
-  min-width: 132px;
+  width: 100%;
+  min-width: 0;
   height: 34px;
-  padding: 0 8px;
+  padding: 0 6px;
   font-size: 12px;
+  box-sizing: border-box;
 }
 
 .orderDetails {

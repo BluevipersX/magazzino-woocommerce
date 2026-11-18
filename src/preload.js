@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("magazzino", {
   updateFilteredProducts: (payload) => ipcRenderer.invoke("products:bulk-update-filtered", payload),
   listOrders: (params) => ipcRenderer.invoke("orders:list", params),
   updateOrderStatus: (orderId, status) => ipcRenderer.invoke("orders:update-status", { orderId, status }),
+  getTrackingProviders: () => ipcRenderer.invoke("orders:tracking-providers"),
   getOrderTracking: (orderId) => ipcRenderer.invoke("orders:get-tracking", { orderId }),
   addOrderTracking: (payload) => ipcRenderer.invoke("orders:add-tracking", payload),
   getOrderRefunds: (orderId) => ipcRenderer.invoke("orders:get-refunds", { orderId }),

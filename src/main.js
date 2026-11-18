@@ -1518,7 +1518,8 @@ async function wooRequest(pathname, options = {}) {
   const config = await readConfig();
   ensureConfig(config);
 
-  const url = new URL(`${config.storeUrl}/wp-json/wc/v3/${pathname.replace(/^\/+/, "")}`);
+  const apiNamespace = String(options.apiNamespace || "wc/v3").replace(/^\/+|\/+$/g, "");
+  const url = new URL(`${config.storeUrl}/wp-json/${apiNamespace}/${pathname.replace(/^\/+/, "")}`);
   if (options.query) {
     Object.entries(options.query).forEach(([key, value]) => {
       if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, value);
@@ -2890,10 +2891,11 @@ const editableOrderStatuses = new Set([
 ]);
 
 function normalizeTrackingItem(item = {}) {
+  const carrierName = String(item.tracking_provider || item.carrier_name || item.carrier_id || "Corriere");
   return {
     trackingNumber: String(item.tracking_number || ""),
-    carrierId: String(item.carrier_id || ""),
-    carrierName: String(item.carrier_name || item.tracking_provider || item.carrier_id || "Corriere"),
+    carrierId: String(item.tracking_provider || item.carrier_id || ""),
+    carrierName,
     trackingLink: String(item.tracking_link || ""),
     dateShipped: String(item.date_shipped || "")
   };
@@ -2910,6 +2912,36 @@ function normalizeTrackingRows(data) {
   }
   if (data == null) return [];
   throw new Error("Risposta tracking WooCommerce non valida.");
+}
+
+function normalizeTrackingProviders(data) {
+  if (typeof data === "string") {
+    const preview = data.trim().replace(/\s+/g, " ").slice(0, 140);
+    throw new Error(`Risposta elenco corrieri non valida: ${preview || "vuota"}`);
+  }
+
+  const groups = data && data.data && !Array.isArray(data.data) ? data.data : data;
+  if (!groups || typeof groups !== "object" || Array.isArray(groups)) {
+    throw new Error("Risposta elenco corrieri WooCommerce non valida.");
+  }
+
+  const providers = [];
+  for (const [region, entries] of Object.entries(groups)) {
+    if (!entries || typeof entries !== "object") continue;
+    if (Array.isArray(entries)) {
+      for (const entry of entries) {
+        const name = String(entry && (entry.name || entry.id || entry.tracking_provider) || "").trim();
+        if (name) providers.push({ id: name, name, region });
+      }
+      continue;
+    }
+    for (const [nameValue, trackingUrl] of Object.entries(entries)) {
+      const name = String(nameValue || "").trim();
+      if (name && typeof trackingUrl === "string") providers.push({ id: name, name, region });
+    }
+  }
+
+  return providers.sort((a, b) => a.region.localeCompare(b.region) || a.name.localeCompare(b.name));
 }
 
 function isWooAuthError(error) {
@@ -3021,7 +3053,9 @@ ipcMain.handle("orders:get-tracking", async (_event, params = {}) => {
   if (!Number.isSafeInteger(orderId) || orderId <= 0) throw new Error("ID ordine non valido.");
 
   try {
-    const result = await orderRequestWithAuthFallback(`orders/${orderId}/shipment-tracking`);
+    const result = await orderRequestWithAuthFallback(`orders/${orderId}/shipment-trackings`, {
+      apiNamespace: "wc-shipment-tracking/v3"
+    });
     const rows = normalizeTrackingRows(result.data);
     addDiagnostic("orders", `Tracking ordine ${orderId}: ${rows.length} spedizioni.`);
     return { rows };
@@ -3031,19 +3065,31 @@ ipcMain.handle("orders:get-tracking", async (_event, params = {}) => {
   }
 });
 
+ipcMain.handle("orders:tracking-providers", async () => {
+  const result = await orderRequestWithAuthFallback("shipment-trackings/providers", {
+    apiNamespace: "wc-shipment-tracking/v3",
+    retries: 1,
+    timeoutMs: 15000
+  });
+  const providers = normalizeTrackingProviders(result.data);
+  addDiagnostic("orders", `Corrieri tracking caricati: ${providers.length}.`);
+  return { providers };
+});
+
 ipcMain.handle("orders:add-tracking", async (_event, params = {}) => {
   const orderId = Number(params.orderId);
   const trackingNumber = String(params.trackingNumber || "").trim();
   const carrierId = String(params.carrierId || "").trim();
   if (!Number.isSafeInteger(orderId) || orderId <= 0) throw new Error("ID ordine non valido.");
   if (!trackingNumber || trackingNumber.length > 200) throw new Error("Inserisci un codice tracking valido (massimo 200 caratteri).");
-  if (!carrierId || carrierId.length > 100) throw new Error("Inserisci l'ID API del corriere (massimo 100 caratteri).");
+  if (!carrierId || carrierId.length > 150) throw new Error("Seleziona un corriere configurato nel sito.");
 
   try {
-    const result = await orderRequestWithAuthFallback(`orders/${orderId}/shipment-tracking`, {
+    const result = await orderRequestWithAuthFallback(`orders/${orderId}/shipment-trackings`, {
+      apiNamespace: "wc-shipment-tracking/v3",
       method: "POST",
       retries: 1,
-      body: { tracking_number: trackingNumber, carrier_id: carrierId }
+      body: { tracking_number: trackingNumber, tracking_provider: carrierId }
     });
     const responseData = result.data;
     if (!responseData || typeof responseData !== "object" || Array.isArray(responseData)) {

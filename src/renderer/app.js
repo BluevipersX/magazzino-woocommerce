@@ -17,6 +17,7 @@ const state = {
   orderTracking: new Map(),
   orderTrackingLoading: new Set(),
   orderTrackingSaving: new Set(),
+  trackingProviders: { status: "idle", providers: [], error: "" },
   orderStatusUpdating: new Set(),
   orderRefunds: new Map(),
   orderRefundsLoading: new Set(),
@@ -725,7 +726,7 @@ function orderStatusOptionsMarkup(currentStatus) {
 
 function trackingErrorMessage(error) {
   const message = String(typeof error === "string" ? error : error && error.message || "Errore sconosciuto");
-  if (/\b404\b|rest_no_route|no route|endpoint.*not found/i.test(message)) {
+  if (/\b404\b|rest_no_route|no route|nessun percorso|corrispondenza.*url|endpoint.*not found/i.test(message)) {
     return "API tracking non disponibile. Attiva Enable REST API in WooCommerce > Impostazioni > Shipment Tracking > Advanced.";
   }
   if (/\b401\b|\b403\b|unauthori[sz]ed|forbidden/i.test(message)) {
@@ -755,6 +756,35 @@ function formatOrderMoney(value, currency = "EUR") {
   return new Intl.NumberFormat("it-IT", { style: "currency", currency }).format(number);
 }
 
+function trackingProviderOptionsMarkup(providers) {
+  const groups = new Map();
+  for (const provider of providers) {
+    if (!groups.has(provider.region)) groups.set(provider.region, []);
+    groups.get(provider.region).push(provider);
+  }
+  return [...groups.entries()].map(([region, items]) => `
+    <optgroup label="${escapeAttr(region)}">
+      ${items.map((provider) => `<option value="${escapeAttr(provider.id)}">${escapeHtml(provider.name)}</option>`).join("")}
+    </optgroup>
+  `).join("");
+}
+
+async function loadTrackingProviders(force = false) {
+  if (state.trackingProviders.status === "loading") return;
+  if (state.trackingProviders.status === "loaded" && !force) return;
+
+  state.trackingProviders = { status: "loading", providers: [], error: "" };
+  try {
+    const result = await window.magazzino.getTrackingProviders();
+    state.trackingProviders = { status: "loaded", providers: result.providers || [], error: "" };
+  } catch (error) {
+    state.trackingProviders = { status: "error", providers: [], error: error.message || "Errore sconosciuto" };
+  } finally {
+    const order = state.orders.find((item) => item.id === state.selectedOrderId);
+    if (order) renderOrderDetails(order);
+  }
+}
+
 function orderItemsCount(order) {
   return (order.items || []).reduce((total, item) => total + Number(item.quantity || 0), 0);
 }
@@ -777,8 +807,21 @@ function renderOrderDetails(order) {
   if (trackingState.status === "loading" && !state.orderTrackingLoading.has(order.id)) {
     loadOrderTracking(order.id);
   }
+  if (state.trackingProviders.status === "idle") loadTrackingProviders();
   const trackingRows = trackingState.rows || [];
   const isSavingTracking = state.orderTrackingSaving.has(order.id);
+  const providerOptions = trackingProviderOptionsMarkup(state.trackingProviders.providers || []);
+  const providerSelectDisabled = isSavingTracking
+    || trackingState.status === "loading"
+    || state.trackingProviders.status !== "loaded"
+    || !state.trackingProviders.providers.length;
+  const providerHelp = state.trackingProviders.status === "loading"
+    ? "Caricamento corrieri configurati..."
+    : state.trackingProviders.status === "error"
+      ? `${escapeHtml(trackingErrorMessage(state.trackingProviders.error))} <button class="textButton" type="button" data-retry-tracking-providers>Riprova</button>`
+      : state.trackingProviders.status === "loaded" && !state.trackingProviders.providers.length
+        ? "Nessun corriere disponibile nell'elenco API del sito."
+        : "Seleziona un corriere configurato nell'API Shipment Tracking del sito.";
   els.orderDetails.innerHTML = `
     <div class="orderDetailHeader">
       <div>
@@ -834,13 +877,16 @@ function renderOrderDetails(order) {
       ` : trackingState.status === "loaded" ? `<p class="trackingMessage">Nessun codice tracking inserito.</p>` : ""}
       <form class="trackingForm" data-order-tracking-form data-order-id="${escapeAttr(order.id)}">
         <label>ID corriere API
-          <input name="carrierId" type="text" maxlength="100" placeholder="es. ups / ID Packlink registrato" autocomplete="off" required ${isSavingTracking || trackingState.status === "loading" ? "disabled" : ""} />
+          <select name="carrierId" required ${providerSelectDisabled ? "disabled" : ""}>
+            <option value="">Seleziona un corriere...</option>
+            ${providerOptions}
+          </select>
         </label>
         <label>Codice tracking
           <input name="trackingNumber" type="text" maxlength="200" placeholder="Numero della spedizione" autocomplete="off" required ${isSavingTracking || trackingState.status === "loading" ? "disabled" : ""} />
         </label>
-        <button type="submit" ${isSavingTracking || trackingState.status === "loading" ? "disabled" : ""}>${isSavingTracking ? "Salvataggio..." : "Aggiungi tracking"}</button>
-        <small>Richiede l'API REST Shipment Tracking attiva. Packlink PRO può sincronizzare i dati: il codice appare qui se l'integrazione lo espone a questo endpoint.</small>
+        <button type="submit" ${providerSelectDisabled ? "disabled" : ""}>${isSavingTracking ? "Salvataggio..." : "Aggiungi tracking"}</button>
+        <small>${providerHelp}</small>
       </form>
     </section>
     <div class="orderItems">
@@ -1811,6 +1857,8 @@ els.orderDetails.addEventListener("click", (event) => {
   }
   const retryButton = event.target.closest("button[data-retry-order-tracking]");
   if (retryButton) loadOrderTracking(retryButton.dataset.retryOrderTracking);
+  const retryProvidersButton = event.target.closest("button[data-retry-tracking-providers]");
+  if (retryProvidersButton) loadTrackingProviders(true);
 });
 els.refundSubmitButton.addEventListener("click", submitOrderRefund);
 els.refundCancelButton.addEventListener("click", closeRefundModal);
