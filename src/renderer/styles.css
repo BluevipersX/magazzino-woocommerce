@@ -909,115 +909,6 @@ tr.dirty td:first-child {
   gap: 10px;
 }
 
-.orderTracking {
-  display: grid;
-  gap: 10px;
-  padding-top: 12px;
-  border-top: 1px solid var(--color-border);
-}
-
-.orderTrackingHeading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.orderTrackingHeading h3 {
-  font-size: 16px;
-}
-
-.orderTrackingHeading span,
-.trackingMessage {
-  color: var(--color-text-soft);
-  font-size: 12px;
-}
-
-.trackingMessage {
-  margin: 0;
-  line-height: 1.4;
-}
-
-.trackingMessage.error {
-  color: var(--color-error);
-}
-
-.trackingErrorBlock {
-  display: grid;
-  justify-items: start;
-  gap: 8px;
-}
-
-.trackingRetryButton {
-  height: 30px;
-  padding: 0 10px;
-  font-size: 12px;
-}
-
-.trackingList {
-  display: grid;
-  gap: 6px;
-}
-
-.trackingItem {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.trackingItem div {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
-.trackingItem strong,
-.trackingItem span {
-  overflow-wrap: anywhere;
-  font-size: 12px;
-}
-
-.trackingItem span,
-.trackingItem small {
-  color: var(--color-text-soft);
-}
-
-.trackingForm {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.trackingForm label {
-  min-width: 0;
-  gap: 4px;
-  color: var(--color-text-soft);
-  font-size: 11px;
-}
-
-.trackingForm input {
-  height: 36px;
-  font-size: 12px;
-}
-
-.trackingForm button,
-.trackingForm > small {
-  grid-column: 1 / -1;
-}
-
-.trackingForm button {
-  height: 36px;
-}
-
-.trackingForm > small {
-  color: var(--color-text-soft);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
 .orderItems {
   display: grid;
   gap: 10px;
@@ -1432,14 +1323,8 @@ tr.dirty td:first-child {
 
   .orderFilters,
   .ordersLayout,
-  .orderFacts,
-  .trackingForm {
+  .orderFacts {
     grid-template-columns: 1fr;
-  }
-
-  .trackingForm button,
-  .trackingForm > small {
-    grid-column: auto;
   }
 
   .cardFields {

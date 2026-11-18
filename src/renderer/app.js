@@ -14,10 +14,6 @@ const state = {
   ordersLoaded: false,
   ordersLoading: false,
   selectedOrderId: null,
-  orderTracking: new Map(),
-  orderTrackingLoading: new Set(),
-  orderTrackingSaving: new Set(),
-  trackingProviders: { status: "idle", providers: [], error: "" },
   orderStatusUpdating: new Set(),
   orderRefunds: new Map(),
   orderRefundsLoading: new Set(),
@@ -724,20 +720,6 @@ function orderStatusOptionsMarkup(currentStatus) {
   `).join("");
 }
 
-function trackingErrorMessage(error) {
-  const message = String(typeof error === "string" ? error : error && error.message || "Errore sconosciuto");
-  if (/\b404\b|rest_no_route|no route|nessun percorso|corrispondenza.*url|endpoint.*not found/i.test(message)) {
-    return "API tracking non disponibile. Attiva Enable REST API in WooCommerce > Impostazioni > Shipment Tracking > Advanced.";
-  }
-  if (/\b401\b|\b403\b|unauthori[sz]ed|forbidden/i.test(message)) {
-    return "Permessi insufficienti: verifica che le chiavi REST WooCommerce abbiano accesso in lettura e scrittura.";
-  }
-  if (/carrier|corrier|provider/i.test(message)) {
-    return "ID corriere non riconosciuto. L'API accetta i corrieri integrati, non quelli personalizzati dalla schermata ordini.";
-  }
-  return message;
-}
-
 function formatOrderDate(value) {
   if (!value) return "-";
   const date = new Date(value);
@@ -756,35 +738,6 @@ function formatOrderMoney(value, currency = "EUR") {
   return new Intl.NumberFormat("it-IT", { style: "currency", currency }).format(number);
 }
 
-function trackingProviderOptionsMarkup(providers) {
-  const groups = new Map();
-  for (const provider of providers) {
-    if (!groups.has(provider.region)) groups.set(provider.region, []);
-    groups.get(provider.region).push(provider);
-  }
-  return [...groups.entries()].map(([region, items]) => `
-    <optgroup label="${escapeAttr(region)}">
-      ${items.map((provider) => `<option value="${escapeAttr(provider.id)}">${escapeHtml(provider.name)}</option>`).join("")}
-    </optgroup>
-  `).join("");
-}
-
-async function loadTrackingProviders(force = false) {
-  if (state.trackingProviders.status === "loading") return;
-  if (state.trackingProviders.status === "loaded" && !force) return;
-
-  state.trackingProviders = { status: "loading", providers: [], error: "" };
-  try {
-    const result = await window.magazzino.getTrackingProviders();
-    state.trackingProviders = { status: "loaded", providers: result.providers || [], error: "" };
-  } catch (error) {
-    state.trackingProviders = { status: "error", providers: [], error: error.message || "Errore sconosciuto" };
-  } finally {
-    const order = state.orders.find((item) => item.id === state.selectedOrderId);
-    if (order) renderOrderDetails(order);
-  }
-}
-
 function orderItemsCount(order) {
   return (order.items || []).reduce((total, item) => total + Number(item.quantity || 0), 0);
 }
@@ -796,32 +749,6 @@ function renderOrderDetails(order) {
   }
 
   const items = order.items || [];
-  let trackingState = state.orderTracking.get(order.id);
-  if (!trackingState) {
-    trackingState = { status: "loading", rows: [] };
-    state.orderTracking.set(order.id, trackingState);
-  }
-  if (trackingState.status === "idle") {
-    trackingState.status = "loading";
-  }
-  if (trackingState.status === "loading" && !state.orderTrackingLoading.has(order.id)) {
-    loadOrderTracking(order.id);
-  }
-  if (state.trackingProviders.status === "idle") loadTrackingProviders();
-  const trackingRows = trackingState.rows || [];
-  const isSavingTracking = state.orderTrackingSaving.has(order.id);
-  const providerOptions = trackingProviderOptionsMarkup(state.trackingProviders.providers || []);
-  const providerSelectDisabled = isSavingTracking
-    || trackingState.status === "loading"
-    || state.trackingProviders.status !== "loaded"
-    || !state.trackingProviders.providers.length;
-  const providerHelp = state.trackingProviders.status === "loading"
-    ? "Caricamento corrieri configurati..."
-    : state.trackingProviders.status === "error"
-      ? `${escapeHtml(trackingErrorMessage(state.trackingProviders.error))} <button class="textButton" type="button" data-retry-tracking-providers>Riprova</button>`
-      : state.trackingProviders.status === "loaded" && !state.trackingProviders.providers.length
-        ? "Nessun corriere disponibile nell'elenco API del sito."
-        : "Seleziona un corriere configurato nell'API Shipment Tracking del sito.";
   els.orderDetails.innerHTML = `
     <div class="orderDetailHeader">
       <div>
@@ -853,42 +780,6 @@ function renderOrderDetails(order) {
         <strong>${escapeHtml(order.shippingAddress || order.billingAddress || "-")}</strong>
       </div>
     </div>
-    <section class="orderTracking">
-      <div class="orderTrackingHeading">
-        <h3>Spedizione e tracking</h3>
-        <span>${trackingRows.length} codici</span>
-      </div>
-      ${trackingState.status === "loading" ? `<p class="trackingMessage">Caricamento tracking...</p>` : ""}
-      ${trackingState.status === "error" ? `
-        <div class="trackingErrorBlock">
-          <p class="trackingMessage error">${escapeHtml(trackingErrorMessage(trackingState.error))}</p>
-          <button class="secondary trackingRetryButton" type="button" data-retry-order-tracking="${escapeAttr(order.id)}">Riprova</button>
-        </div>
-      ` : ""}
-      ${trackingRows.length ? `
-        <div class="trackingList">
-          ${trackingRows.map((tracking) => `
-            <article class="trackingItem">
-              <div><strong>${escapeHtml(tracking.carrierName || tracking.carrierId || "Corriere")}</strong><span>${escapeHtml(tracking.trackingNumber)}</span></div>
-              <small>${escapeHtml(formatOrderDate(tracking.dateShipped))}</small>
-            </article>
-          `).join("")}
-        </div>
-      ` : trackingState.status === "loaded" ? `<p class="trackingMessage">Nessun codice tracking inserito.</p>` : ""}
-      <form class="trackingForm" data-order-tracking-form data-order-id="${escapeAttr(order.id)}">
-        <label>ID corriere API
-          <select name="carrierId" required ${providerSelectDisabled ? "disabled" : ""}>
-            <option value="">Seleziona un corriere...</option>
-            ${providerOptions}
-          </select>
-        </label>
-        <label>Codice tracking
-          <input name="trackingNumber" type="text" maxlength="200" placeholder="Numero della spedizione" autocomplete="off" required ${isSavingTracking || trackingState.status === "loading" ? "disabled" : ""} />
-        </label>
-        <button type="submit" ${providerSelectDisabled ? "disabled" : ""}>${isSavingTracking ? "Salvataggio..." : "Aggiungi tracking"}</button>
-        <small>${providerHelp}</small>
-      </form>
-    </section>
     <div class="orderItems">
       <h3>Prodotti acquistati</h3>
       ${
@@ -959,26 +850,6 @@ function selectOrder(orderId) {
   renderOrderDetails(state.orders.find((order) => order.id === state.selectedOrderId));
 }
 
-async function loadOrderTracking(orderId) {
-  const id = Number(orderId);
-  if (state.orderTrackingLoading.has(id)) return;
-  state.orderTrackingLoading.add(id);
-  const current = state.orderTracking.get(id) || { status: "loading", rows: [] };
-  current.status = "loading";
-  state.orderTracking.set(id, current);
-  try {
-    const result = await window.magazzino.getOrderTracking(id);
-    state.orderTracking.set(id, { status: "loaded", rows: result.rows || [] });
-  } catch (error) {
-    state.orderTracking.set(id, { status: "error", rows: current.rows || [], error: error.message });
-  } finally {
-    state.orderTrackingLoading.delete(id);
-    if (state.selectedOrderId === id) {
-      renderOrderDetails(state.orders.find((order) => order.id === id));
-    }
-  }
-}
-
 async function updateOrderStatus(orderId, nextStatus, select) {
   const order = state.orders.find((item) => item.id === Number(orderId));
   if (!order || order.status === nextStatus) return;
@@ -1000,36 +871,6 @@ async function updateOrderStatus(orderId, nextStatus, select) {
   } finally {
     state.orderStatusUpdating.delete(order.id);
     renderOrders();
-  }
-}
-
-async function addTrackingToOrder(form) {
-  const orderId = Number(form.dataset.orderId);
-  const order = state.orders.find((item) => item.id === orderId);
-  if (!order || state.orderTrackingSaving.has(orderId)) return;
-  const carrierId = String(form.elements.carrierId.value || "").trim();
-  const trackingNumber = String(form.elements.trackingNumber.value || "").trim();
-  const submitButton = form.querySelector('button[type="submit"]');
-  state.orderTrackingSaving.add(orderId);
-  submitButton.disabled = true;
-  els.ordersStatusText.textContent = `Salvataggio tracking ordine #${order.number}...`;
-  renderOrderDetails(order);
-  try {
-    const result = await window.magazzino.addOrderTracking({ orderId, carrierId, trackingNumber });
-    const current = state.orderTracking.get(orderId) || { rows: [] };
-    state.orderTracking.set(orderId, {
-      status: "loaded",
-      rows: [...(current.rows || []), result.tracking]
-    });
-    els.ordersStatusText.textContent = `Tracking aggiunto all'ordine #${order.number}.`;
-  } catch (error) {
-    const message = trackingErrorMessage(error);
-    const current = state.orderTracking.get(orderId) || { rows: [] };
-    state.orderTracking.set(orderId, { status: "error", rows: current.rows || [], error: message });
-    els.ordersStatusText.textContent = `Ordine #${order.number}: ${message}`;
-  } finally {
-    state.orderTrackingSaving.delete(orderId);
-    renderOrderDetails(order);
   }
 }
 
@@ -1843,22 +1684,11 @@ els.ordersBody.addEventListener("change", (event) => {
   if (!select) return;
   updateOrderStatus(select.dataset.orderId, select.value, select);
 });
-els.orderDetails.addEventListener("submit", (event) => {
-  const form = event.target.closest("form[data-order-tracking-form]");
-  if (!form) return;
-  event.preventDefault();
-  addTrackingToOrder(form);
-});
 els.orderDetails.addEventListener("click", (event) => {
   const refundButton = event.target.closest("button[data-refund-order]");
   if (refundButton) {
     openRefundModal(refundButton.dataset.refundOrder);
-    return;
   }
-  const retryButton = event.target.closest("button[data-retry-order-tracking]");
-  if (retryButton) loadOrderTracking(retryButton.dataset.retryOrderTracking);
-  const retryProvidersButton = event.target.closest("button[data-retry-tracking-providers]");
-  if (retryProvidersButton) loadTrackingProviders(true);
 });
 els.refundSubmitButton.addEventListener("click", submitOrderRefund);
 els.refundCancelButton.addEventListener("click", closeRefundModal);
